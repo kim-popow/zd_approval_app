@@ -37,14 +37,12 @@ export const ApprovalEvaluator = ({ rules }) => {
 
   const fetchRulesFromCustomObject = async () => {
     try {
-      console.log('Fetching rules from custom object...');
       const response = await window.zafClient.request({
         url: '/api/v2/custom_objects/credit_memo_approval_rules/records',
         type: 'GET'
       });
 
       const records = response.custom_object_records || [];
-      console.log('Custom object records fetched:', records.length);
       
       const loadedRules = records.map(record => ({
         id: record.id,
@@ -58,7 +56,6 @@ export const ApprovalEvaluator = ({ rules }) => {
         autoApprove: record.custom_object_fields.auto_approve === 'true' || record.custom_object_fields.auto_approve === true
       }));
 
-      console.log('Loaded rules:', loadedRules);
       return loadedRules;
     } catch (error) {
       console.error('Error fetching rules from custom object:', error);
@@ -67,16 +64,11 @@ export const ApprovalEvaluator = ({ rules }) => {
   };
 
   const autoAssignToLevel1 = useCallback(async () => {
-    console.log('=== AUTO ASSIGN TO LEVEL 1 START ===');
-    console.log('autoAssignProcessedRef.current:', autoAssignProcessedRef.current);
-    
     if (autoAssignProcessedRef.current) {
-      console.log('Auto-assignment already processed for this ticket, skipping');
       return;
     }
     
     try {
-      console.log('Step 1: Fetching ticket data...');
       const data = await window.zafClient.get([
         'ticket.id',
         'ticket.subject',
@@ -86,31 +78,21 @@ export const ApprovalEvaluator = ({ rules }) => {
         'ticket.requester'
       ]);
 
-      console.log('Step 2: Ticket data fetched:', {
-        ticketId: data['ticket.id'],
-        status: data['ticket.status']
-      });
-
-      console.log('Step 3: Fetching groups...');
       const groupsResponse = await window.zafClient.request({
         url: '/api/v2/groups.json',
         type: 'GET'
       });
       const fetchedGroups = groupsResponse.groups || [];
-      console.log('Step 4: Groups fetched:', fetchedGroups.length);
 
-      console.log('Step 5: Processing custom fields...');
       const ticketFieldsResponse = await window.zafClient.get('ticketFields');
       const allFields = ticketFieldsResponse.ticketFields || [];
       
-      // Find Type of Credit field
       const creditTypeField = allFields.find(field => {
         const fieldLabel = (field.label || field.title || '').toLowerCase();
         return fieldLabel.includes('type') && fieldLabel.includes('credit');
       });
       
       if (creditTypeField) {
-        console.log('Type of Credit field found:', creditTypeField.name);
         const creditTypeData = await window.zafClient.get(`ticket.customField:${creditTypeField.name}`);
         data[creditTypeField.name] = creditTypeData[`ticket.customField:${creditTypeField.name}`];
       }
@@ -122,23 +104,15 @@ export const ApprovalEvaluator = ({ rules }) => {
           const fieldData = await window.zafClient.get(`ticket.customField:${field.name}`);
           data[field.name] = fieldData[`ticket.customField:${field.name}`];
         } catch (err) {
-          console.log(`Could not fetch ${field.name}:`, err);
+          // Field not accessible
         }
       }
-
-      console.log('Step 6: Complete ticket data for evaluation:', data);
       
-      console.log('Step 7: Fetching rules from custom object...');
       const fetchedRules = await fetchRulesFromCustomObject();
-      console.log('Step 8: Rules fetched:', fetchedRules);
 
-      console.log('Step 9: Evaluating approval rules...');
       const evaluation = evaluateApproval(data, fetchedRules, fetchedGroups, creditTypeField?.name);
-      console.log('Evaluation result:', evaluation);
 
       if (evaluation.isAutoApproved) {
-        console.log('All triggered rules are auto-approve, setting status to approved');
-        
         await window.zafClient.request({
           url: `/api/v2/tickets/${data['ticket.id']}.json`,
           type: 'PUT',
@@ -154,17 +128,20 @@ export const ApprovalEvaluator = ({ rules }) => {
           })
         });
 
-        console.log('Ticket auto-approved successfully');
         autoAssignProcessedRef.current = true;
+        
+        // Refresh the app to show the approved status
+        setTimeout(() => {
+          loadTicketData();
+        }, 1000);
+        
         return;
       }
 
       if (evaluation.requiresApproval && evaluation.approvalLevels.length > 0) {
         const level1 = evaluation.approvalLevels[0];
-        console.log('Step 10: Level 1 to assign:', level1);
 
-        console.log('Step 11: Assigning ticket to group via API...');
-        const assignResponse = await window.zafClient.request({
+        await window.zafClient.request({
           url: `/api/v2/tickets/${data['ticket.id']}.json`,
           type: 'PUT',
           contentType: 'application/json',
@@ -180,13 +157,12 @@ export const ApprovalEvaluator = ({ rules }) => {
           })
         });
 
-        console.log('Step 12: Assignment response:', assignResponse);
-        console.log('Step 13: Setting autoAssignProcessedRef to true');
         autoAssignProcessedRef.current = true;
-        console.log('Step 14: autoAssignProcessedRef.current is now:', autoAssignProcessedRef.current);
-        console.log('=== AUTO ASSIGN TO LEVEL 1 COMPLETE ===');
-      } else {
-        console.log('No approval required - no rules were triggered');
+        
+        // Refresh the app to show the triggered rules and approve/decline buttons
+        setTimeout(() => {
+          loadTicketData();
+        }, 1000);
       }
     } catch (error) {
       console.error('Error in autoAssignToLevel1:', error);
@@ -195,14 +171,12 @@ export const ApprovalEvaluator = ({ rules }) => {
 
   const initializeApp = async () => {
     try {
-      console.log('Fetching custom statuses to find status IDs...');
       const statusesResponse = await window.zafClient.request({
         url: '/api/v2/custom_statuses.json',
         type: 'GET'
       });
 
       const customStatuses = statusesResponse.custom_statuses || [];
-      console.log('Custom statuses:', customStatuses);
 
       const submitForApprovalStatus = customStatuses.find(s => 
         s.agent_label && 
@@ -234,8 +208,6 @@ export const ApprovalEvaluator = ({ rules }) => {
         declined: declinedStatus?.id
       };
 
-      console.log('Custom status IDs set:', customStatusIdsRef.current);
-
       setupEventListeners();
       await loadTicketData();
     } catch (error) {
@@ -246,68 +218,36 @@ export const ApprovalEvaluator = ({ rules }) => {
   };
 
   const setupEventListeners = () => {
-    console.log('Setting up event listeners...');
-
     window.zafClient.on('ticket.save', async () => {
-      console.log('\n\n>>> TICKET SAVE EVENT FIRED <<<');
-      console.log('Current autoAssignProcessedRef.current:', autoAssignProcessedRef.current);
-      console.log('Current previousStatusRef.current:', previousStatusRef.current);
-      console.log('Declined status ID:', customStatusIdsRef.current.declined);
-      
       if (previousStatusRef.current === customStatusIdsRef.current.declined) {
-        console.log('Previous status was declined - resetting workflow for resubmission');
         autoAssignProcessedRef.current = false;
       }
 
-      console.log('Waiting 1 second before checking ticket status...');
       setTimeout(async () => {
         try {
-          console.log('Fetching ticket ID...');
           const ticketIdData = await window.zafClient.get('ticket.id');
           const ticketId = ticketIdData['ticket.id'];
-          console.log('Ticket ID:', ticketId);
           
-          console.log('Fetching full ticket data from API...');
           const ticketResponse = await window.zafClient.request({
             url: `/api/v2/tickets/${ticketId}.json`,
             type: 'GET'
           });
 
-          console.log('Full ticket data from API:', ticketResponse.ticket);
-          console.log('Custom status ID from ticket:', ticketResponse.ticket.custom_status_id);
-          console.log('Submit for approval status ID:', customStatusIdsRef.current.submit_for_approval);
-          console.log('Status match?', ticketResponse.ticket.custom_status_id === customStatusIdsRef.current.submit_for_approval);
-
           if (ticketResponse.ticket.custom_status_id === customStatusIdsRef.current.submit_for_approval) {
-            console.log('✓ Custom status matches submit_for_approval');
-            console.log('Checking if already processed...');
-            console.log('autoAssignProcessedRef.current before check:', autoAssignProcessedRef.current);
-            
             if (!autoAssignProcessedRef.current) {
-              console.log('✓ Not yet processed, triggering auto-assignment');
               await autoAssignToLevel1();
               previousStatusRef.current = customStatusIdsRef.current.submit_for_approval;
-            } else {
-              console.log('✗ Already processed, skipping auto-assignment');
             }
-          } else {
-            console.log('✗ Custom status does not match submit_for_approval');
-            console.log('Expected:', customStatusIdsRef.current.submit_for_approval);
-            console.log('Got:', ticketResponse.ticket.custom_status_id);
           }
         } catch (error) {
           console.error('Error checking ticket status after save:', error);
         }
       }, 1000);
     });
-
-    console.log('Event listeners set up');
   };
 
   const loadTicketData = async () => {
     try {
-      console.log('=== LOAD TICKET DATA START ===');
-      
       const data = await window.zafClient.get([
         'ticket.id',
         'ticket.subject',
@@ -327,18 +267,12 @@ export const ApprovalEvaluator = ({ rules }) => {
       const currentGroupId = ticketResponse.ticket.group_id;
       const currentStatusId = ticketResponse.ticket.custom_status_id;
       
-      console.log('Initial ticket load - custom_status_id:', currentStatusId);
-      console.log('Submit for approval status ID:', customStatusIdsRef.current.submit_for_approval);
-      
       setCurrentCustomStatusId(currentStatusId);
       previousStatusRef.current = currentStatusId;
 
-      // Check if ticket is already in submit_for_approval status on initial load
       if (currentStatusId === customStatusIdsRef.current.submit_for_approval && !autoAssignProcessedRef.current) {
-        console.log('Ticket is in submit_for_approval status on initial load, triggering auto-assignment after delay');
         setTimeout(() => {
           if (!autoAssignProcessedRef.current) {
-            console.log('Delayed auto-assignment trigger');
             autoAssignToLevel1();
           }
         }, 2000);
@@ -359,7 +293,6 @@ export const ApprovalEvaluator = ({ rules }) => {
       const ticketFieldsResponse = await window.zafClient.get('ticketFields');
       const allFields = ticketFieldsResponse.ticketFields || [];
       
-      // Find Type of Credit field - check both title and label
       const creditTypeField = allFields.find(field => {
         const fieldLabel = (field.label || field.title || '').toLowerCase();
         return fieldLabel.includes('type') && fieldLabel.includes('credit');
@@ -367,7 +300,6 @@ export const ApprovalEvaluator = ({ rules }) => {
       
       if (creditTypeField) {
         setCreditTypeFieldId(creditTypeField.name);
-        console.log('Type of Credit field found:', creditTypeField.name);
       }
 
       const customFields = allFields.filter(field => field.name && field.name.startsWith('custom_field_'));
@@ -377,7 +309,7 @@ export const ApprovalEvaluator = ({ rules }) => {
           const fieldData = await window.zafClient.get(`ticket.customField:${field.name}`);
           data[field.name] = fieldData[`ticket.customField:${field.name}`];
         } catch (err) {
-          console.log(`Could not fetch ${field.name}`);
+          // Field not accessible
         }
       }
 
@@ -391,15 +323,11 @@ export const ApprovalEvaluator = ({ rules }) => {
         setCanApprove(isInCurrentGroup);
       }
 
-      // CRITICAL FIX: Fetch rules from custom object instead of using prop
-      console.log('Fetching rules for evaluation...');
       const fetchedRules = await fetchRulesFromCustomObject();
-      console.log('Rules fetched for evaluation:', fetchedRules);
 
       const evaluation = evaluateApproval(data, fetchedRules, fetchedGroups, creditTypeField?.name);
       setEvaluation(evaluation);
 
-      console.log('=== LOAD TICKET DATA END ===');
       setLoading(false);
     } catch (err) {
       console.error('Error loading ticket data:', err);
@@ -409,85 +337,50 @@ export const ApprovalEvaluator = ({ rules }) => {
   };
 
   const evaluateApproval = (data, rules, groups, creditTypeFieldId) => {
-    console.log('=== EVALUATE APPROVAL START ===');
-    console.log('Number of rules to evaluate:', rules.length);
-    console.log('All rules:', rules);
-    
-    console.log('Ticket data keys:', Object.keys(data));
-    console.log('Credit type field ID:', creditTypeFieldId);
-
     const creditTypeValue = creditTypeFieldId ? data[creditTypeFieldId] : null;
-    console.log('Type of Credit Value from ticket:', creditTypeValue);
 
     const triggeredRules = [];
     const approvalLevelsMap = new Map();
 
-    rules.forEach((rule, index) => {
-      console.log(`\n--- Evaluating Rule ${index + 1}: ${rule.ruleName} ---`);
-      console.log('Rule config:', {
-        creditTypeValue: rule.creditTypeValue,
-        fieldName: rule.fieldName,
-        operator: rule.operator,
-        value: rule.value,
-        autoApprove: rule.autoApprove
-      });
-
+    rules.forEach((rule) => {
       if (rule.creditTypeValue && creditTypeValue !== rule.creditTypeValue) {
-        console.log(`✗ Type of Credit mismatch: Expected "${rule.creditTypeValue}", Got "${creditTypeValue}"`);
-        console.log(`Rule skipped due to Type of Credit mismatch`);
         return;
       }
 
-      console.log(`✓ Type of Credit matches: ${rule.creditTypeValue}`);
-
       const fieldValue = data[rule.fieldName];
-      console.log(`Field: ${rule.fieldName}`);
-      console.log(`Field value: ${fieldValue} (type: ${typeof fieldValue})`);
-      console.log(`Operator: ${rule.operator}`);
-      console.log(`Threshold: ${rule.value} (type: ${typeof rule.value})`);
-      console.log(`Auto-approve: ${rule.autoApprove}`);
 
       let conditionMet = false;
 
       switch (rule.operator) {
         case 'greater_than':
           conditionMet = parseFloat(fieldValue) > parseFloat(rule.value);
-          console.log(`Comparison: ${fieldValue} > ${rule.value} = ${conditionMet}`);
           break;
         case 'less_than':
           conditionMet = parseFloat(fieldValue) < parseFloat(rule.value);
-          console.log(`Comparison: ${fieldValue} < ${rule.value} = ${conditionMet}`);
           break;
         case 'equal_to':
           conditionMet = String(fieldValue).toLowerCase() === String(rule.value).toLowerCase();
-          console.log(`Comparison: ${fieldValue} === ${rule.value} = ${conditionMet}`);
           break;
         case 'not_equal_to':
           conditionMet = String(fieldValue).toLowerCase() !== String(rule.value).toLowerCase();
-          console.log(`Comparison: ${fieldValue} !== ${rule.value} = ${conditionMet}`);
           break;
         case 'contains':
           conditionMet = String(fieldValue).toLowerCase().includes(String(rule.value).toLowerCase());
-          console.log(`Comparison: ${fieldValue} contains ${rule.value} = ${conditionMet}`);
           break;
         case 'not_contains':
           conditionMet = !String(fieldValue).toLowerCase().includes(String(rule.value).toLowerCase());
-          console.log(`Comparison: ${fieldValue} not contains ${rule.value} = ${conditionMet}`);
           break;
         case 'is_empty':
           conditionMet = !fieldValue || fieldValue === '';
-          console.log(`Comparison: ${fieldValue} is empty = ${conditionMet}`);
           break;
         case 'is_not_empty':
           conditionMet = fieldValue && fieldValue !== '';
-          console.log(`Comparison: ${fieldValue} is not empty = ${conditionMet}`);
           break;
         default:
-          console.log(`Unknown operator: ${rule.operator}`);
+          break;
       }
 
       if (conditionMet) {
-        console.log(`✓ Rule condition MET`);
         triggeredRules.push(rule);
 
         if (!rule.autoApprove && rule.approvalLevel && rule.groupId) {
@@ -499,25 +392,13 @@ export const ApprovalEvaluator = ({ rules }) => {
               groupId: rule.groupId,
               groupName: group ? group.name : 'Unknown Group'
             });
-            console.log(`Added to approval levels: Level ${level}, Group: ${group ? group.name : 'Unknown'}`);
           }
-        } else if (rule.autoApprove) {
-          console.log(`Rule is auto-approve, not adding to approval levels`);
         }
-      } else {
-        console.log(`✗ Rule condition NOT met`);
       }
     });
 
     const approvalLevels = Array.from(approvalLevelsMap.values()).sort((a, b) => a.level - b.level);
     const allAutoApprove = triggeredRules.length > 0 && triggeredRules.every(rule => rule.autoApprove);
-
-    console.log('\n=== EVALUATION SUMMARY ===');
-    console.log('Triggered rules:', triggeredRules);
-    console.log('Approval levels (manual only):', approvalLevels);
-    console.log('All auto-approve:', allAutoApprove);
-    
-    console.log('=== EVALUATE APPROVAL END ===');
 
     return {
       requiresApproval: approvalLevels.length > 0,
@@ -525,46 +406,6 @@ export const ApprovalEvaluator = ({ rules }) => {
       triggeredRules,
       isAutoApproved: allAutoApprove
     };
-  };
-
-  const handleAssignToNextLevel = async () => {
-    if (!evaluation || !evaluation.approvalLevels || evaluation.approvalLevels.length === 0) {
-      return;
-    }
-
-    const currentLevelIndex = evaluation.approvalLevels.findIndex(
-      level => level.groupId === String(currentGroup?.id)
-    );
-
-    if (currentLevelIndex === -1 || currentLevelIndex >= evaluation.approvalLevels.length - 1) {
-      return;
-    }
-
-    const nextLevel = evaluation.approvalLevels[currentLevelIndex + 1];
-
-    try {
-      await window.zafClient.request({
-        url: `/api/v2/tickets/${ticketData['ticket.id']}.json`,
-        type: 'PUT',
-        contentType: 'application/json',
-        data: JSON.stringify({
-          ticket: {
-            group_id: nextLevel.groupId,
-            comment: {
-              body: `Ticket assigned to ${nextLevel.groupName} (Level ${nextLevel.level}) for approval.`,
-              public: false
-            }
-          }
-        })
-      });
-
-      setCurrentGroup(groups.find(g => g.id === parseInt(nextLevel.groupId)));
-      setSuccessMessage(`Ticket assigned to ${nextLevel.groupName} (Level ${nextLevel.level})`);
-      setTimeout(() => setSuccessMessage(''), 5000);
-    } catch (error) {
-      console.error('Error assigning ticket:', error);
-      setError(`Failed to assign ticket: ${JSON.stringify(error)}`);
-    }
   };
 
   const handleApprove = async () => {
@@ -577,12 +418,7 @@ export const ApprovalEvaluator = ({ rules }) => {
     const isLastLevel = currentLevelIndex === evaluation.approvalLevels.length - 1;
 
     try {
-      console.log('=== HANDLE APPROVE START ===');
-
       if (isLastLevel) {
-        console.log('Final approval - setting status to approved');
-        console.log('Approved status ID:', customStatusIdsRef.current.approved);
-
         const updateData = {
           ticket: {
             custom_status_id: customStatusIdsRef.current.approved,
@@ -593,16 +429,12 @@ export const ApprovalEvaluator = ({ rules }) => {
           }
         };
 
-        console.log('Update data:', updateData);
-
-        const response = await window.zafClient.request({
+        await window.zafClient.request({
           url: `/api/v2/tickets/${ticketData['ticket.id']}.json`,
           type: 'PUT',
           contentType: 'application/json',
           data: JSON.stringify(updateData)
         });
-
-        console.log('Final approval response:', response);
 
         setCurrentCustomStatusId(customStatusIdsRef.current.approved);
         setCanApprove(false);
@@ -631,7 +463,6 @@ export const ApprovalEvaluator = ({ rules }) => {
         setSuccessMessage(`Approved and assigned to ${nextLevel.groupName} (Level ${nextLevel.level})`);
       }
 
-      console.log('=== HANDLE APPROVE END ===');
       setTimeout(() => setSuccessMessage(''), 5000);
     } catch (error) {
       console.error('Error approving:', error);
@@ -668,7 +499,6 @@ export const ApprovalEvaluator = ({ rules }) => {
       setDeclineReason('');
       setSuccessMessage('Request declined and assigned directly to requester');
       setTimeout(() => setSuccessMessage(''), 5000);
-      console.log('Ticket declined and assigned to user:', originalRequester.id);
     } catch (error) {
       console.error('Error declining:', error);
       setError(`Failed to decline: ${JSON.stringify(error)}`);
@@ -710,9 +540,6 @@ export const ApprovalEvaluator = ({ rules }) => {
     level => level.groupId === String(currentGroup?.id)
   );
   const currentLevel = currentLevelIndex >= 0 ? evaluation.approvalLevels[currentLevelIndex] : null;
-  const nextLevel = currentLevelIndex >= 0 && currentLevelIndex < evaluation.approvalLevels.length - 1
-    ? evaluation.approvalLevels[currentLevelIndex + 1]
-    : null;
 
   return (
     <EvaluationContainer>

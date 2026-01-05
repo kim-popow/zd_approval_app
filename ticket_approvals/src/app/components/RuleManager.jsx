@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from '@zendeskgarden/react-buttons';
 import { Field, Label, Input, Textarea, Checkbox } from '@zendeskgarden/react-forms';
-import { Combobox, Field as DropdownField, Item } from '@zendeskgarden/react-dropdowns';
+import { Combobox, Field as DropdownField, Option } from '@zendeskgarden/react-dropdowns';
 import { Modal, Header, Body, Footer, Close } from '@zendeskgarden/react-modals';
 import { Alert } from '@zendeskgarden/react-notifications';
 import { RuleList, RuleCard, RuleHeader, RuleDetails, RuleActions, FormRow } from '../styles/RuleManager';
@@ -458,9 +458,9 @@ export const RuleManager = () => {
                     }
                   }}
                 >
-                  {creditTypeOptions.length === 0 && <Item value="" isDisabled>Loading options...</Item>}
+                  {creditTypeOptions.length === 0 && <Option value="" label="Loading options..." isDisabled />}
                   {creditTypeOptions.map(option => (
-                    <Item key={option.value} value={option.value}>{option.label}</Item>
+                    <Option key={option.value} value={option.value} label={option.label} />
                   ))}
                 </Combobox>
               </DropdownField>
@@ -479,7 +479,7 @@ export const RuleManager = () => {
                   }}
                 >
                   {ticketFields.map(field => (
-                    <Item key={field.name} value={field.name}>{field.label}</Item>
+                    <Option key={field.name} value={field.name} label={field.label} />
                   ))}
                 </Combobox>
               </DropdownField>
@@ -498,7 +498,7 @@ export const RuleManager = () => {
                   }}
                 >
                   {operators.map(op => (
-                    <Item key={op.value} value={op.value}>{op.label}</Item>
+                    <Option key={op.value} value={op.value} label={op.label} />
                   ))}
                 </Combobox>
               </DropdownField>
@@ -541,7 +541,7 @@ export const RuleManager = () => {
                       }}
                     >
                       {approvalLevels.map(level => (
-                        <Item key={level.value} value={level.value}>{level.label}</Item>
+                        <Option key={level.value} value={level.value} label={level.label} />
                       ))}
                     </Combobox>
                   </DropdownField>
@@ -560,7 +560,7 @@ export const RuleManager = () => {
                       }}
                     >
                       {groups.map(group => (
-                        <Item key={group.id} value={String(group.id)}>{group.name}</Item>
+                        <Option key={group.id} value={String(group.id)} label={group.name} />
                       ))}
                     </Combobox>
                   </DropdownField>

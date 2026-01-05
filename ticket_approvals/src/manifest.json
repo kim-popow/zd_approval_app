@@ -2,7 +2,8 @@
   "name": "Approval App",
   "author": {
     "name": "Kim Popow",
-    "email": "kim.popow@hunterdouglas.com"
+    "email": "kim.popow@hunterdouglas.com",
+    "url": "https://hunterdouglas1762300199.zendesk.com/api/v2/users/42977882072852.json"
   },
   "defaultLocale": "en",
   "private": true,
