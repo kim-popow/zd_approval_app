@@ -1,9 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Alert } from '@zendeskgarden/react-notifications';
-import { Well } from '@zendeskgarden/react-notifications';
-import { Button } from '@zendeskgarden/react-buttons';
-import { Modal, Header, Body, Footer, Close } from '@zendeskgarden/react-modals';
-import { Field, Label, Textarea } from '@zendeskgarden/react-forms';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Alert, Well } from '@zendeskgarden/react-notifications';
 import { Dots } from '@zendeskgarden/react-loaders';
 import {
   EvaluationContainer,
@@ -12,8 +8,7 @@ import {
   CriteriaItem,
   StatusBadge,
   WorkflowTracker,
-  LevelBadge,
-  ButtonGroup
+  LevelBadge
 } from '../styles/ApprovalEvaluator';
 
 export const ApprovalEvaluator = ({ rules }) => {
@@ -21,19 +16,19 @@ export const ApprovalEvaluator = ({ rules }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [evaluation, setEvaluation] = useState(null);
-  const [groups, setGroups] = useState([]);
   const [currentGroup, setCurrentGroup] = useState(null);
-  const [currentUser, setCurrentUser] = useState(null);
   const [canApprove, setCanApprove] = useState(false);
-  const [originalRequester, setOriginalRequester] = useState(null);
-  const [showDeclineModal, setShowDeclineModal] = useState(false);
-  const [declineReason, setDeclineReason] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [currentCustomStatusId, setCurrentCustomStatusId] = useState(null);
   const customStatusIdsRef = useRef({});
   const previousStatusRef = useRef(null);
   const autoAssignProcessedRef = useRef(false);
-  const [creditTypeFieldId, setCreditTypeFieldId] = useState(null);
+  const isProcessingStatusActionRef = useRef(false);
+  const groupsRef = useRef([]);
+  const currentGroupRef = useRef(null);
+  const currentUserRef = useRef(null);
+  const originalRequesterRef = useRef(null);
+  const evaluationRef = useRef(null);
 
   const fetchRulesFromCustomObject = async () => {
     try {
@@ -51,6 +46,9 @@ export const ApprovalEvaluator = ({ rules }) => {
         fieldName: record.custom_object_fields.field_name || '',
         operator: record.custom_object_fields.operator || '',
         value: record.custom_object_fields.value || '',
+        fieldName2: record.custom_object_fields.field_name_2 || '',
+        operator2: record.custom_object_fields.operator_2 || '',
+        value2: record.custom_object_fields.value_2 || '',
         approvalLevel: record.custom_object_fields.approval_level || '',
         groupId: record.custom_object_fields.group_id || '',
         autoApprove: record.custom_object_fields.auto_approve === 'true' || record.custom_object_fields.auto_approve === true
@@ -159,7 +157,7 @@ export const ApprovalEvaluator = ({ rules }) => {
 
         autoAssignProcessedRef.current = true;
         
-        // Refresh the app to show the triggered rules and approve/decline buttons
+        // Refresh the app to show workflow details
         setTimeout(() => {
           loadTicketData();
         }, 1000);
@@ -219,6 +217,10 @@ export const ApprovalEvaluator = ({ rules }) => {
 
   const setupEventListeners = () => {
     window.zafClient.on('ticket.save', async () => {
+      if (isProcessingStatusActionRef.current) {
+        return;
+      }
+
       if (previousStatusRef.current === customStatusIdsRef.current.declined) {
         autoAssignProcessedRef.current = false;
       }
@@ -233,12 +235,30 @@ export const ApprovalEvaluator = ({ rules }) => {
             type: 'GET'
           });
 
-          if (ticketResponse.ticket.custom_status_id === customStatusIdsRef.current.submit_for_approval) {
+          const ticket = ticketResponse.ticket;
+          const customStatusId = ticket.custom_status_id;
+          const previousStatusId = previousStatusRef.current;
+          const statusChanged = customStatusId !== previousStatusId;
+
+          if (customStatusId === customStatusIdsRef.current.submit_for_approval) {
             if (!autoAssignProcessedRef.current) {
               await autoAssignToLevel1();
               previousStatusRef.current = customStatusIdsRef.current.submit_for_approval;
             }
+            return;
           }
+
+          if (!statusChanged) {
+            return;
+          }
+
+          if (customStatusId === customStatusIdsRef.current.approved) {
+            await handleApprove(ticket.id, true);
+          } else if (customStatusId === customStatusIdsRef.current.declined) {
+            await handleDecline(ticket.id, true);
+          }
+
+          previousStatusRef.current = customStatusId;
         } catch (error) {
           console.error('Error checking ticket status after save:', error);
         }
@@ -283,11 +303,14 @@ export const ApprovalEvaluator = ({ rules }) => {
         type: 'GET'
       });
       const fetchedGroups = groupsResponse.groups || [];
-      setGroups(fetchedGroups);
+      groupsRef.current = fetchedGroups;
 
       if (currentGroupId) {
         const group = fetchedGroups.find(g => g.id === currentGroupId);
         setCurrentGroup(group || null);
+        currentGroupRef.current = group || null;
+      } else {
+        currentGroupRef.current = null;
       }
 
       const ticketFieldsResponse = await window.zafClient.get('ticketFields');
@@ -297,10 +320,6 @@ export const ApprovalEvaluator = ({ rules }) => {
         const fieldLabel = (field.label || field.title || '').toLowerCase();
         return fieldLabel.includes('type') && fieldLabel.includes('credit');
       });
-      
-      if (creditTypeField) {
-        setCreditTypeFieldId(creditTypeField.name);
-      }
 
       const customFields = allFields.filter(field => field.name && field.name.startsWith('custom_field_'));
 
@@ -314,8 +333,8 @@ export const ApprovalEvaluator = ({ rules }) => {
       }
 
       setTicketData(data);
-      setCurrentUser(data.currentUser);
-      setOriginalRequester(data['ticket.requester']);
+      currentUserRef.current = data.currentUser;
+      originalRequesterRef.current = data['ticket.requester'];
 
       if (data.currentUser && data.currentUser.groups) {
         const userGroupIds = data.currentUser.groups.map(g => g.id);
@@ -327,6 +346,7 @@ export const ApprovalEvaluator = ({ rules }) => {
 
       const evaluation = evaluateApproval(data, fetchedRules, fetchedGroups, creditTypeField?.name);
       setEvaluation(evaluation);
+      evaluationRef.current = evaluation;
 
       setLoading(false);
     } catch (err) {
@@ -336,11 +356,138 @@ export const ApprovalEvaluator = ({ rules }) => {
     }
   };
 
+  // Helper function to normalize numeric values by removing formatting (commas, etc.)
+  const normalizeNumericValue = (value) => {
+    if (value === null || value === undefined || value === '') {
+      return '';
+    }
+    // Remove all non-numeric characters except decimal point
+    const normalized = String(value).replace(/[^\d.]/g, '');
+    return normalized;
+  };
+
+  // Helper function to check if a value is numeric (after normalization)
+  const isNumericValue = (value) => {
+    if (!value || value === '') return false;
+    const normalized = normalizeNumericValue(value);
+    return normalized !== '' && !isNaN(parseFloat(normalized));
+  };
+
+  // Helper function to compare values with formatting tolerance
+  const compareValues = (fieldValue, ruleValue, operator) => {
+    // Check if both values are numeric
+    const fieldIsNumeric = isNumericValue(fieldValue);
+    const ruleIsNumeric = isNumericValue(ruleValue);
+
+    // For numeric operators, normalize and compare as numbers
+    if (operator === 'greater_than' || operator === 'less_than') {
+      // For comparison operators, try to parse as numbers even if only one is numeric
+      const normalizedField = normalizeNumericValue(fieldValue);
+      const normalizedRule = normalizeNumericValue(ruleValue);
+      
+      if (normalizedField && normalizedRule) {
+        const fieldNum = parseFloat(normalizedField);
+        const ruleNum = parseFloat(normalizedRule);
+        
+        if (!isNaN(fieldNum) && !isNaN(ruleNum)) {
+          if (operator === 'greater_than') {
+            return fieldNum > ruleNum;
+          } else if (operator === 'less_than') {
+            return fieldNum < ruleNum;
+          }
+        }
+      }
+      // If we can't parse as numbers, return false for comparison operators
+      return false;
+    }
+
+    // If both are numeric, normalize and compare as numbers
+    if (fieldIsNumeric && ruleIsNumeric) {
+      const normalizedField = normalizeNumericValue(fieldValue);
+      const normalizedRule = normalizeNumericValue(ruleValue);
+      const fieldNum = parseFloat(normalizedField);
+      const ruleNum = parseFloat(normalizedRule);
+
+      switch (operator) {
+        case 'equal_to':
+          return fieldNum === ruleNum;
+        case 'not_equal_to':
+          return fieldNum !== ruleNum;
+        default:
+          // For other operators, fall back to string comparison
+          break;
+      }
+    }
+
+    // For non-numeric or mixed comparisons, use string comparison
+    const fieldStr = String(fieldValue || '').toLowerCase();
+    const ruleStr = String(ruleValue || '').toLowerCase();
+
+    switch (operator) {
+      case 'equal_to':
+        // For equal_to, also try numeric comparison if one is numeric
+        if (fieldIsNumeric || ruleIsNumeric) {
+          const normalizedField = normalizeNumericValue(fieldValue);
+          const normalizedRule = normalizeNumericValue(ruleValue);
+          if (normalizedField && normalizedRule) {
+            return parseFloat(normalizedField) === parseFloat(normalizedRule);
+          }
+        }
+        return fieldStr === ruleStr;
+      case 'not_equal_to':
+        // For not_equal_to, also try numeric comparison if one is numeric
+        if (fieldIsNumeric || ruleIsNumeric) {
+          const normalizedField = normalizeNumericValue(fieldValue);
+          const normalizedRule = normalizeNumericValue(ruleValue);
+          if (normalizedField && normalizedRule) {
+            return parseFloat(normalizedField) !== parseFloat(normalizedRule);
+          }
+        }
+        return fieldStr !== ruleStr;
+      case 'contains':
+        // For contains, also check normalized numeric values
+        if (fieldIsNumeric && ruleIsNumeric) {
+          const normalizedField = normalizeNumericValue(fieldValue);
+          const normalizedRule = normalizeNumericValue(ruleValue);
+          return normalizedField.includes(normalizedRule) || normalizedRule.includes(normalizedField);
+        }
+        return fieldStr.includes(ruleStr);
+      case 'not_contains':
+        // For not_contains, also check normalized numeric values
+        if (fieldIsNumeric && ruleIsNumeric) {
+          const normalizedField = normalizeNumericValue(fieldValue);
+          const normalizedRule = normalizeNumericValue(ruleValue);
+          return !normalizedField.includes(normalizedRule) && !normalizedRule.includes(normalizedField);
+        }
+        return !fieldStr.includes(ruleStr);
+      default:
+        return false;
+    }
+  };
+
   const evaluateApproval = (data, rules, groups, creditTypeFieldId) => {
     const creditTypeValue = creditTypeFieldId ? data[creditTypeFieldId] : null;
 
     const triggeredRules = [];
     const approvalLevelsMap = new Map();
+
+    const evaluateCriterion = (fieldValue, operator, ruleValue) => {
+      switch (operator) {
+        case 'greater_than':
+        case 'less_than':
+        case 'equal_to':
+        case 'not_equal_to':
+        case 'contains':
+        case 'not_contains':
+          return compareValues(fieldValue, ruleValue, operator);
+        case 'is_empty':
+          return !fieldValue || fieldValue === '';
+        case 'is_not_empty':
+          return fieldValue && fieldValue !== '';
+        default:
+          return false;
+      }
+    };
 
     rules.forEach((rule) => {
       if (rule.creditTypeValue && creditTypeValue !== rule.creditTypeValue) {
@@ -348,37 +495,20 @@ export const ApprovalEvaluator = ({ rules }) => {
       }
 
       const fieldValue = data[rule.fieldName];
+      const fieldValue2 = data[rule.fieldName2];
 
-      let conditionMet = false;
-
-      switch (rule.operator) {
-        case 'greater_than':
-          conditionMet = parseFloat(fieldValue) > parseFloat(rule.value);
-          break;
-        case 'less_than':
-          conditionMet = parseFloat(fieldValue) < parseFloat(rule.value);
-          break;
-        case 'equal_to':
-          conditionMet = String(fieldValue).toLowerCase() === String(rule.value).toLowerCase();
-          break;
-        case 'not_equal_to':
-          conditionMet = String(fieldValue).toLowerCase() !== String(rule.value).toLowerCase();
-          break;
-        case 'contains':
-          conditionMet = String(fieldValue).toLowerCase().includes(String(rule.value).toLowerCase());
-          break;
-        case 'not_contains':
-          conditionMet = !String(fieldValue).toLowerCase().includes(String(rule.value).toLowerCase());
-          break;
-        case 'is_empty':
-          conditionMet = !fieldValue || fieldValue === '';
-          break;
-        case 'is_not_empty':
-          conditionMet = fieldValue && fieldValue !== '';
-          break;
-        default:
-          break;
+      const hasCompleteCriteria =
+        !!rule.fieldName &&
+        !!rule.operator &&
+        !!rule.fieldName2 &&
+        !!rule.operator2;
+      if (!hasCompleteCriteria) {
+        return;
       }
+
+      const firstConditionMet = evaluateCriterion(fieldValue, rule.operator, rule.value);
+      const secondConditionMet = evaluateCriterion(fieldValue2, rule.operator2, rule.value2);
+      const conditionMet = firstConditionMet && secondConditionMet;
 
       if (conditionMet) {
         triggeredRules.push(rule);
@@ -408,29 +538,47 @@ export const ApprovalEvaluator = ({ rules }) => {
     };
   };
 
-  const handleApprove = async () => {
-    if (!evaluation || !evaluation.approvalLevels) return;
+  const handleApprove = async (ticketId = ticketData?.['ticket.id'], fromStatusChange = false) => {
+    const activeEvaluation = evaluationRef.current;
+    const activeGroup = currentGroupRef.current;
+    const activeUser = currentUserRef.current;
+    const activeGroups = groupsRef.current;
 
-    const currentLevelIndex = evaluation.approvalLevels.findIndex(
-      level => level.groupId === String(currentGroup?.id)
+    if (!ticketId || !activeEvaluation || !activeEvaluation.approvalLevels) return;
+
+    const currentLevelIndex = activeEvaluation.approvalLevels.findIndex(
+      level => level.groupId === String(activeGroup?.id)
     );
 
-    const isLastLevel = currentLevelIndex === evaluation.approvalLevels.length - 1;
+    if (currentLevelIndex < 0) {
+      return;
+    }
+
+    const userGroupIds = activeUser?.groups?.map(group => group.id) || [];
+    const isInCurrentGroup = activeGroup?.id && userGroupIds.includes(activeGroup.id);
+    if (fromStatusChange && !isInCurrentGroup) {
+      setError(`Only members of ${activeGroup?.name || 'the current approval group'} can approve this request.`);
+      return;
+    }
+
+    const isLastLevel = currentLevelIndex === activeEvaluation.approvalLevels.length - 1;
 
     try {
+      isProcessingStatusActionRef.current = true;
+
       if (isLastLevel) {
         const updateData = {
           ticket: {
             custom_status_id: customStatusIdsRef.current.approved,
             comment: {
-              body: `Final approval granted by ${currentUser.name}. All required approvals complete.`,
+              body: `Final approval granted by ${activeUser.name}. All required approvals complete.`,
               public: false
             }
           }
         };
 
         await window.zafClient.request({
-          url: `/api/v2/tickets/${ticketData['ticket.id']}.json`,
+          url: `/api/v2/tickets/${ticketId}.json`,
           type: 'PUT',
           contentType: 'application/json',
           data: JSON.stringify(updateData)
@@ -440,10 +588,10 @@ export const ApprovalEvaluator = ({ rules }) => {
         setCanApprove(false);
         setSuccessMessage('Final approval granted. All required approvals complete.');
       } else {
-        const nextLevel = evaluation.approvalLevels[currentLevelIndex + 1];
+        const nextLevel = activeEvaluation.approvalLevels[currentLevelIndex + 1];
 
         await window.zafClient.request({
-          url: `/api/v2/tickets/${ticketData['ticket.id']}.json`,
+          url: `/api/v2/tickets/${ticketId}.json`,
           type: 'PUT',
           contentType: 'application/json',
           data: JSON.stringify({
@@ -451,57 +599,85 @@ export const ApprovalEvaluator = ({ rules }) => {
               group_id: nextLevel.groupId,
               custom_status_id: customStatusIdsRef.current.pending_approval,
               comment: {
-                body: `Approved by ${currentUser.name}. Ticket assigned to ${nextLevel.groupName} (Level ${nextLevel.level}) for next approval.`,
+                body: `Approved by ${activeUser.name}. Ticket assigned to ${nextLevel.groupName} (Level ${nextLevel.level}) for next approval.`,
                 public: false
               }
             }
           })
         });
 
-        setCurrentGroup(groups.find(g => g.id === parseInt(nextLevel.groupId)));
+        const nextGroup = activeGroups.find(g => g.id === parseInt(nextLevel.groupId));
+        setCurrentGroup(nextGroup);
+        currentGroupRef.current = nextGroup;
         setCurrentCustomStatusId(customStatusIdsRef.current.pending_approval);
         setSuccessMessage(`Approved and assigned to ${nextLevel.groupName} (Level ${nextLevel.level})`);
+      }
+
+      if (fromStatusChange) {
+        await loadTicketData();
       }
 
       setTimeout(() => setSuccessMessage(''), 5000);
     } catch (error) {
       console.error('Error approving:', error);
       setError(`Failed to approve: ${JSON.stringify(error)}`);
+    } finally {
+      isProcessingStatusActionRef.current = false;
     }
   };
 
-  const handleDecline = async () => {
-    if (!declineReason.trim()) {
+  const handleDecline = async (ticketId = ticketData?.['ticket.id'], fromStatusChange = false) => {
+    const activeUser = currentUserRef.current;
+    const activeGroup = currentGroupRef.current;
+    const activeRequester = originalRequesterRef.current;
+    if (!ticketId || !activeUser) return;
+
+    const userGroupIds = activeUser?.groups?.map(group => group.id) || [];
+    const isInCurrentGroup = activeGroup?.id && userGroupIds.includes(activeGroup.id);
+    if (fromStatusChange && !isInCurrentGroup) {
+      setError(`Only members of ${activeGroup?.name || 'the current approval group'} can decline this request.`);
       return;
     }
 
     try {
+      isProcessingStatusActionRef.current = true;
+      const updatePayload = {
+        ticket: {
+          custom_status_id: customStatusIdsRef.current.declined,
+          comment: {
+            body: `Request declined by ${activeUser.name}.`,
+            public: false
+          }
+        }
+      };
+
+      if (activeRequester && activeRequester.id) {
+        updatePayload.ticket.assignee_id = activeRequester.id;
+        updatePayload.ticket.group_id = null;
+      }
+
       await window.zafClient.request({
-        url: `/api/v2/tickets/${ticketData['ticket.id']}.json`,
+        url: `/api/v2/tickets/${ticketId}.json`,
         type: 'PUT',
         contentType: 'application/json',
-        data: JSON.stringify({
-          ticket: {
-            assignee_id: originalRequester.id,
-            group_id: null,
-            custom_status_id: customStatusIdsRef.current.declined,
-            comment: {
-              body: `Request declined by ${currentUser.name}.\n\nReason: ${declineReason}`,
-              public: false
-            }
-          }
-        })
+        data: JSON.stringify(updatePayload)
       });
 
       setCurrentGroup(null);
+      currentGroupRef.current = null;
       setCurrentCustomStatusId(customStatusIdsRef.current.declined);
-      setShowDeclineModal(false);
-      setDeclineReason('');
       setSuccessMessage('Request declined and assigned directly to requester');
+
+      if (fromStatusChange) {
+        await loadTicketData();
+      }
+
       setTimeout(() => setSuccessMessage(''), 5000);
     } catch (error) {
       console.error('Error declining:', error);
       setError(`Failed to decline: ${JSON.stringify(error)}`);
+    } finally {
+      isProcessingStatusActionRef.current = false;
     }
   };
 
@@ -585,7 +761,6 @@ export const ApprovalEvaluator = ({ rules }) => {
             {evaluation.approvalLevels.map((level, index) => {
               const isCompleted = currentLevelIndex > index;
               const isCurrent = currentLevelIndex === index;
-              const isPending = currentLevelIndex < index;
 
               return (
                 <LevelBadge
@@ -609,7 +784,7 @@ export const ApprovalEvaluator = ({ rules }) => {
                 {rule.autoApprove ? (
                   <>✓ {rule.ruleName} - Auto-Approve</>
                 ) : (
-                  <>⚠ {rule.ruleName} - Requires Level {rule.approvalLevel} approval</>
+                  <>⚠ {rule.ruleName} - Requires Level {rule.approvalLevel} approval (all criteria matched)</>
                 )}
               </CriteriaItem>
             ))}
@@ -620,57 +795,17 @@ export const ApprovalEvaluator = ({ rules }) => {
       {currentLevel && !isFullyApproved && !isDeclined && (
         <div style={{ marginTop: '16px' }}>
           {canApprove ? (
-            <ButtonGroup>
-              <Button
-                isPrimary
-                onClick={handleApprove}
-              >
-                {currentLevelIndex === evaluation.approvalLevels.length - 1
-                  ? 'Final Approval'
-                  : `Approve & Assign to Level ${evaluation.approvalLevels[currentLevelIndex + 1].level}`}
-              </Button>
-              <Button
-                isDanger
-                onClick={() => setShowDeclineModal(true)}
-              >
-                Decline
-              </Button>
-            </ButtonGroup>
+            <Alert type="info">
+              Use the ticket status control to take action: set status to <strong>Approved</strong> to move
+              to the next approval level (or finalize if this is the last level), or set status to
+              <strong> Declined</strong> to decline the request.
+            </Alert>
           ) : (
             <Alert type="info">
               You are not a member of the current approval group. Only members of {currentGroup?.name} can approve or decline this request.
             </Alert>
           )}
         </div>
-      )}
-
-      {showDeclineModal && (
-        <Modal onClose={() => setShowDeclineModal(false)}>
-          <Header>Decline Request</Header>
-          <Body>
-            <Field>
-              <Label>Reason for declining (required)</Label>
-              <Textarea
-                value={declineReason}
-                onChange={(e) => setDeclineReason(e.target.value)}
-                rows={4}
-                placeholder="Please provide a reason for declining this request..."
-              />
-            </Field>
-          </Body>
-          <Footer>
-            <Button onClick={() => setShowDeclineModal(false)}>Cancel</Button>
-            <Button
-              isPrimary
-              isDanger
-              onClick={handleDecline}
-              disabled={!declineReason.trim()}
-            >
-              Decline Request
-            </Button>
-          </Footer>
-          <Close aria-label="Close modal" />
-        </Modal>
       )}
     </EvaluationContainer>
   );

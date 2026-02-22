@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@zendeskgarden/react-buttons';
-import { Field, Label, Input, Textarea, Checkbox } from '@zendeskgarden/react-forms';
+import { Field, Label, Input, Checkbox } from '@zendeskgarden/react-forms';
 import { Combobox, Field as DropdownField, Option } from '@zendeskgarden/react-dropdowns';
 import { Modal, Header, Body, Footer, Close } from '@zendeskgarden/react-modals';
 import { Alert } from '@zendeskgarden/react-notifications';
@@ -10,7 +10,6 @@ export const RuleManager = () => {
   const [rules, setRules] = useState([]);
   const [groups, setGroups] = useState([]);
   const [ticketFields, setTicketFields] = useState([]);
-  const [creditTypeField, setCreditTypeField] = useState(null);
   const [creditTypeOptions, setCreditTypeOptions] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRule, setEditingRule] = useState(null);
@@ -24,6 +23,9 @@ export const RuleManager = () => {
     fieldName: '',
     operator: 'greater_than',
     value: '',
+    fieldName2: '',
+    operator2: 'greater_than',
+    value2: '',
     autoApprove: false,
     approvalLevel: '1',
     groupId: ''
@@ -47,6 +49,74 @@ export const RuleManager = () => {
     { value: '4', label: 'Level 4' },
     { value: '5', label: 'Level 5' }
   ];
+
+  // Helper function to format number with commas and 2 decimal places
+  const formatAmount = (value) => {
+    if (!value || value === '') return '';
+    
+    // Remove all non-numeric characters except decimal point
+    const numericValue = value.toString().replace(/[^\d.]/g, '');
+    
+    // Handle empty or invalid input
+    if (!numericValue || numericValue === '.') return '';
+    
+    // Parse to number
+    const num = parseFloat(numericValue);
+    
+    // Check if valid number
+    if (isNaN(num)) return '';
+    
+    // Format with commas and 2 decimal places
+    return num.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  };
+
+  // Helper function to parse formatted string back to number string
+  const parseAmount = (formattedValue) => {
+    if (!formattedValue || formattedValue === '') return '';
+    
+    // Remove all non-numeric characters except decimal point
+    const numericValue = formattedValue.toString().replace(/[^\d.]/g, '');
+    
+    // Handle empty or just decimal point
+    if (!numericValue || numericValue === '.') return '';
+    
+    // Parse to number to validate
+    const num = parseFloat(numericValue);
+    
+    // Return empty if invalid, otherwise return the numeric string
+    if (isNaN(num)) return '';
+    
+    return num.toString();
+  };
+
+  // Helper function to check if selected field is a numeric type
+  const isNumericField = (fieldName) => {
+    if (!fieldName) return false;
+    const field = ticketFields.find(f => f.name === fieldName);
+    return field && (field.type === 'decimal' || field.type === 'integer');
+  };
+
+  const getPreferredFieldName = (patterns, excluded = []) => {
+    const matchesAllWords = (text, words) => words.every(word => text.includes(word));
+
+    for (const field of ticketFields) {
+      if (excluded.includes(field.name)) continue;
+      const label = String(field.label || '').toLowerCase();
+      const name = String(field.name || '').toLowerCase();
+
+      for (const pattern of patterns) {
+        const words = pattern.toLowerCase().split(' ').filter(Boolean);
+        if (matchesAllWords(label, words) || matchesAllWords(name, words)) {
+          return field.name;
+        }
+      }
+    }
+
+    return '';
+  };
 
   useEffect(() => {
     const initializeData = async () => {
@@ -73,7 +143,7 @@ export const RuleManager = () => {
   const loadTicketFields = async () => {
     try {
       const fieldsData = await window.zafClient.get('ticketFields');
-      const fields = fieldsData['ticketFields'] || [];
+      const fields = fieldsData.ticketFields || [];
       
       console.log('Searching for "Type of Credit" field...');
       
@@ -96,8 +166,6 @@ export const RuleManager = () => {
       }
       
       if (creditTypeFieldObj) {
-        setCreditTypeField(creditTypeFieldObj);
-        
         let options = [];
         
         // Check all possible option locations
@@ -215,6 +283,9 @@ export const RuleManager = () => {
         { key: 'field_name', title: 'Field Name', type: 'text' },
         { key: 'operator', title: 'Operator', type: 'text' },
         { key: 'value', title: 'Value', type: 'text' },
+        { key: 'field_name_2', title: 'Field Name 2', type: 'text' },
+        { key: 'operator_2', title: 'Operator 2', type: 'text' },
+        { key: 'value_2', title: 'Value 2', type: 'text' },
         { key: 'approval_level', title: 'Approval Level', type: 'text' },
         { key: 'group_id', title: 'Group ID', type: 'text' },
         { key: 'auto_approve', title: 'Auto Approve', type: 'checkbox' }
@@ -255,6 +326,9 @@ export const RuleManager = () => {
         fieldName: record.custom_object_fields.field_name || '',
         operator: record.custom_object_fields.operator || 'greater_than',
         value: record.custom_object_fields.value || '',
+        fieldName2: record.custom_object_fields.field_name_2 || '',
+        operator2: record.custom_object_fields.operator_2 || 'greater_than',
+        value2: record.custom_object_fields.value_2 || '',
         approvalLevel: record.custom_object_fields.approval_level || '1',
         groupId: record.custom_object_fields.group_id || '',
         autoApprove: record.custom_object_fields.auto_approve === 'true' || record.custom_object_fields.auto_approve === true
@@ -280,6 +354,9 @@ export const RuleManager = () => {
             field_name: rule.fieldName,
             operator: rule.operator,
             value: rule.value,
+            field_name_2: rule.fieldName2,
+            operator_2: rule.operator2,
+            value_2: rule.value2,
             approval_level: rule.autoApprove ? '' : String(rule.approvalLevel),
             group_id: rule.autoApprove ? '' : String(rule.groupId),
             auto_approve: String(rule.autoApprove)
@@ -337,18 +414,27 @@ export const RuleManager = () => {
         fieldName: rule.fieldName,
         operator: rule.operator,
         value: rule.value,
+        fieldName2: rule.fieldName2,
+        operator2: rule.operator2,
+        value2: rule.value2,
         autoApprove: rule.autoApprove || false,
         approvalLevel: rule.approvalLevel,
         groupId: rule.groupId
       });
     } else {
+      const defaultAmountField = getPreferredFieldName(['credit amount', 'amount']);
+      const defaultTripChargeField = getPreferredFieldName(['trip charge', 'trip'], defaultAmountField ? [defaultAmountField] : []);
+
       setEditingRule(null);
       setFormData({
         ruleName: '',
         creditTypeValue: '',
-        fieldName: '',
+        fieldName: defaultAmountField,
         operator: 'greater_than',
         value: '',
+        fieldName2: defaultTripChargeField,
+        operator2: 'greater_than',
+        value2: '',
         autoApprove: false,
         approvalLevel: '1',
         groupId: ''
@@ -363,8 +449,45 @@ export const RuleManager = () => {
   };
 
   const handleSaveRule = async () => {
+    const requiresValue = (operator) => operator !== 'is_empty' && operator !== 'is_not_empty';
+
+    if (!formData.ruleName.trim()) {
+      setError('Rule name is required');
+      return;
+    }
+    if (!formData.creditTypeValue) {
+      setError('Type of Credit is required');
+      return;
+    }
+    if (!formData.fieldName || !formData.fieldName2) {
+      setError('Both additional checks are required');
+      return;
+    }
+    if (requiresValue(formData.operator) && !String(formData.value).trim()) {
+      setError('Value is required for Additional Check 1');
+      return;
+    }
+    if (requiresValue(formData.operator2) && !String(formData.value2).trim()) {
+      setError('Value is required for Additional Check 2');
+      return;
+    }
+    if (!formData.autoApprove && (!formData.approvalLevel || !formData.groupId)) {
+      setError('Approval level and group are required when auto-approve is off');
+      return;
+    }
+
+    setError(null);
+
+    // Ensure values are unformatted before saving
+    const field = ticketFields.find(f => f.name === formData.fieldName);
+    const field2 = ticketFields.find(f => f.name === formData.fieldName2);
+    const isNumeric = field && (field.type === 'decimal' || field.type === 'integer');
+    const isNumeric2 = field2 && (field2.type === 'decimal' || field2.type === 'integer');
+    
     const rule = {
       ...formData,
+      value: isNumeric ? parseAmount(formData.value) : formData.value,
+      value2: isNumeric2 ? parseAmount(formData.value2) : formData.value2,
       id: editingRule?.id
     };
     await saveRule(rule);
@@ -413,8 +536,8 @@ export const RuleManager = () => {
             </RuleHeader>
             <RuleDetails>
               <div><strong>Type of Credit:</strong> {getCreditTypeLabel(rule.creditTypeValue)}</div>
-              <div><strong>Field:</strong> {getFieldLabel(rule.fieldName)}</div>
-              <div><strong>Condition:</strong> {getOperatorLabel(rule.operator)} {rule.value}</div>
+              <div><strong>Check 1:</strong> {getFieldLabel(rule.fieldName)} {getOperatorLabel(rule.operator)} {rule.value}</div>
+              <div><strong>Check 2:</strong> {getFieldLabel(rule.fieldName2)} {getOperatorLabel(rule.operator2)} {rule.value2}</div>
               {rule.autoApprove ? (
                 <div><strong>Action:</strong> Auto-Approve</div>
               ) : (
@@ -487,7 +610,7 @@ export const RuleManager = () => {
 
             <FormRow>
               <DropdownField>
-                <Label>Operator</Label>
+                <Label>Operator (Check 1)</Label>
                 <Combobox
                   isEditable={false}
                   selectionValue={formData.operator}
@@ -506,11 +629,101 @@ export const RuleManager = () => {
 
             <FormRow>
               <Field>
-                <Label>Value</Label>
+                <Label>Value (Check 1)</Label>
                 <Input
-                  value={formData.value}
-                  onChange={(e) => setFormData({ ...formData, value: e.target.value })}
+                  value={isNumericField(formData.fieldName) 
+                    ? formatAmount(formData.value) 
+                    : formData.value}
+                  onChange={(e) => {
+                    const inputValue = e.target.value;
+                    if (isNumericField(formData.fieldName)) {
+                      // For numeric fields, parse the input and store unformatted value
+                      // The formatted display is handled by the value prop above
+                      const unformatted = parseAmount(inputValue);
+                      setFormData({ ...formData, value: unformatted });
+                    } else {
+                      // For non-numeric fields, store as-is
+                      setFormData({ ...formData, value: inputValue });
+                    }
+                  }}
+                  onBlur={(e) => {
+                    // Ensure proper formatting when field loses focus
+                    if (isNumericField(formData.fieldName) && formData.value) {
+                      // Re-parse to ensure value is clean and properly formatted
+                      const unformatted = parseAmount(formData.value);
+                      if (unformatted !== formData.value) {
+                        setFormData({ ...formData, value: unformatted });
+                      }
+                    }
+                  }}
                   disabled={formData.operator === 'is_empty' || formData.operator === 'is_not_empty'}
+                />
+              </Field>
+            </FormRow>
+
+            <FormRow>
+              <DropdownField>
+                <Label>Additional Field to Evaluate (Check 2)</Label>
+                <Combobox
+                  isEditable={false}
+                  selectionValue={formData.fieldName2}
+                  onChange={({ selectionValue }) => {
+                    if (selectionValue !== undefined) {
+                      setFormData({ ...formData, fieldName2: selectionValue });
+                    }
+                  }}
+                >
+                  {ticketFields.map(field => (
+                    <Option key={`${field.name}_2`} value={field.name} label={field.label} />
+                  ))}
+                </Combobox>
+              </DropdownField>
+            </FormRow>
+
+            <FormRow>
+              <DropdownField>
+                <Label>Operator (Check 2)</Label>
+                <Combobox
+                  isEditable={false}
+                  selectionValue={formData.operator2}
+                  onChange={({ selectionValue }) => {
+                    if (selectionValue !== undefined) {
+                      setFormData({ ...formData, operator2: selectionValue });
+                    }
+                  }}
+                >
+                  {operators.map(op => (
+                    <Option key={`${op.value}_2`} value={op.value} label={op.label} />
+                  ))}
+                </Combobox>
+              </DropdownField>
+            </FormRow>
+
+            <FormRow>
+              <Field>
+                <Label>Value (Check 2)</Label>
+                <Input
+                  value={isNumericField(formData.fieldName2)
+                    ? formatAmount(formData.value2)
+                    : formData.value2}
+                  onChange={(e) => {
+                    const inputValue = e.target.value;
+                    if (isNumericField(formData.fieldName2)) {
+                      const unformatted = parseAmount(inputValue);
+                      setFormData({ ...formData, value2: unformatted });
+                    } else {
+                      setFormData({ ...formData, value2: inputValue });
+                    }
+                  }}
+                  onBlur={() => {
+                    if (isNumericField(formData.fieldName2) && formData.value2) {
+                      const unformatted = parseAmount(formData.value2);
+                      if (unformatted !== formData.value2) {
+                        setFormData({ ...formData, value2: unformatted });
+                      }
+                    }
+                  }}
+                  disabled={formData.operator2 === 'is_empty' || formData.operator2 === 'is_not_empty'}
                 />
               </Field>
             </FormRow>
