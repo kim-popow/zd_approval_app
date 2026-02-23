@@ -26,6 +26,7 @@ export const ApprovalEvaluator = ({ rules }) => {
   const [declineReason, setDeclineReason] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [currentCustomStatusId, setCurrentCustomStatusId] = useState(null);
+  const [prodOrderWarning, setProdOrderWarning] = useState('');
   const customStatusIdsRef = useRef({});
   const previousStatusRef = useRef(null);
   const autoAssignProcessedRef = useRef(false);
@@ -34,6 +35,7 @@ export const ApprovalEvaluator = ({ rules }) => {
   const currentGroupRef = useRef(null);
   const currentUserRef = useRef(null);
   const originalRequesterRef = useRef(null);
+  const originalCreatorRef = useRef(null);
   const ticketCreatorIdRef = useRef(null);
   const evaluationRef = useRef(null);
 
@@ -68,6 +70,19 @@ export const ApprovalEvaluator = ({ rules }) => {
     }
   };
 
+  const normalizeOrderNumbers = (rawValue) => {
+    if (rawValue === null || rawValue === undefined || rawValue === '') return [];
+
+    if (Array.isArray(rawValue)) {
+      return rawValue.map(value => String(value).trim()).filter(Boolean);
+    }
+
+    return String(rawValue)
+      .split(/[\n,;]+/)
+      .map(value => value.trim())
+      .filter(Boolean);
+  };
+
   const autoAssignToLevel1 = useCallback(async () => {
     if (autoAssignProcessedRef.current) {
       return;
@@ -96,6 +111,14 @@ export const ApprovalEvaluator = ({ rules }) => {
         const fieldLabel = (field.label || field.title || '').toLowerCase();
         return fieldLabel.includes('type') && fieldLabel.includes('credit');
       });
+
+      const prodOrderField = allFields.find(field => {
+        const fieldLabel = (field.label || field.title || '').toLowerCase();
+        const hasProd = fieldLabel.includes('product') || fieldLabel.includes('prod');
+        const hasOrder = fieldLabel.includes('order');
+        const hasId = fieldLabel.includes('id');
+        return hasProd && hasOrder && hasId;
+      });
       
       if (creditTypeField) {
         const creditTypeData = await window.zafClient.get(`ticket.customField:${creditTypeField.name}`);
@@ -111,6 +134,18 @@ export const ApprovalEvaluator = ({ rules }) => {
         } catch (err) {
           // Field not accessible
         }
+      }
+
+      if (prodOrderField) {
+        const prodOrderValue = data[prodOrderField.name];
+        const orderNumbers = normalizeOrderNumbers(prodOrderValue);
+        if (orderNumbers.length > 1) {
+          setProdOrderWarning('Multiple Prod Order IDs detected. Please ensure only one Prod Order ID is in the field before submitting for approval.');
+        } else {
+          setProdOrderWarning('');
+        }
+      } else {
+        setProdOrderWarning('');
       }
       
       const fetchedRules = await fetchRulesFromCustomObject();
@@ -426,6 +461,25 @@ export const ApprovalEvaluator = ({ rules }) => {
       setTicketData(data);
       currentUserRef.current = data.currentUser;
       originalRequesterRef.current = data['ticket.requester'];
+      originalCreatorRef.current = null;
+
+      if (ticketResponse.ticket.submitter_id) {
+        try {
+          const creatorResponse = await window.zafClient.request({
+            url: `/api/v2/users/${ticketResponse.ticket.submitter_id}.json`,
+            type: 'GET'
+          });
+          if (creatorResponse?.user) {
+            originalCreatorRef.current = creatorResponse.user;
+          }
+        } catch (creatorErr) {
+          // Fallback handled below.
+        }
+      }
+
+      if (!originalCreatorRef.current && data['ticket.requester']) {
+        originalCreatorRef.current = data['ticket.requester'];
+      }
 
       if (data.currentUser && data.currentUser.groups) {
         const userGroupIds = data.currentUser.groups.map(g => g.id);
@@ -718,6 +772,7 @@ export const ApprovalEvaluator = ({ rules }) => {
   const handleDecline = async (ticketId = ticketData?.['ticket.id']) => {
     const activeUser = currentUserRef.current;
     const activeGroup = currentGroupRef.current;
+    const activeCreator = originalCreatorRef.current;
     const activeRequester = originalRequesterRef.current;
     if (!ticketId || !activeUser) return;
     if (!declineReason.trim()) return;
@@ -741,7 +796,10 @@ export const ApprovalEvaluator = ({ rules }) => {
         }
       };
 
-      if (activeRequester && activeRequester.id) {
+      if (activeCreator && activeCreator.id) {
+        updatePayload.ticket.assignee_id = activeCreator.id;
+        updatePayload.ticket.group_id = null;
+      } else if (activeRequester && activeRequester.id) {
         updatePayload.ticket.assignee_id = activeRequester.id;
         updatePayload.ticket.group_id = null;
       }
@@ -758,7 +816,11 @@ export const ApprovalEvaluator = ({ rules }) => {
       setCurrentCustomStatusId(customStatusIdsRef.current.declined);
       setShowDeclineModal(false);
       setDeclineReason('');
-      setSuccessMessage('Request declined and assigned directly to requester');
+      setSuccessMessage(
+        activeCreator?.name
+          ? `Request declined and reassigned to ${activeCreator.name}`
+          : 'Request declined and reassigned to original credit creator'
+      );
       await loadTicketData();
 
       setTimeout(() => setSuccessMessage(''), 5000);
@@ -843,6 +905,10 @@ export const ApprovalEvaluator = ({ rules }) => {
         <Alert type="warning">Approval Required</Alert>
       ) : (
         <Alert type="success">No Approval Required</Alert>
+      )}
+
+      {isPreSubmission && prodOrderWarning && (
+        <Alert type="warning">{prodOrderWarning}</Alert>
       )}
 
       <Well style={{ marginTop: '16px' }}>

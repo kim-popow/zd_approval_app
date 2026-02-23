@@ -24,6 +24,19 @@ const App = () => {
   const [creatingTicket, setCreatingTicket] = useState(false);
   const [successMessage, setSuccessMessage] = useState(null);
 
+  const normalizeOrderNumbers = (rawValue) => {
+    if (rawValue === null || rawValue === undefined || rawValue === '') return [];
+
+    if (Array.isArray(rawValue)) {
+      return rawValue.map(value => String(value).trim()).filter(Boolean);
+    }
+
+    return String(rawValue)
+      .split(/[\n,;]+/)
+      .map(value => value.trim())
+      .filter(Boolean);
+  };
+
   useEffect(() => {
     let resizeObserver = null;
     let resizeInterval = null;
@@ -191,7 +204,10 @@ const App = () => {
 
       const productOrderIdsField = ticketFieldsResponse.ticket_fields.find(field => {
         const title = (field.title || '').toLowerCase();
-        return title.includes('product') && title.includes('order') && title.includes('id');
+        const hasOrder = title.includes('order');
+        const hasId = title.includes('id');
+        const hasProd = title.includes('product') || title.includes('prod');
+        return hasOrder && hasId && hasProd;
       });
 
       let customFields = [];
@@ -215,17 +231,21 @@ const App = () => {
         const productOrderIdsCustomField = parentTicket.custom_fields.find(cf => cf.id === productOrderIdsField.id);
         
         if (productOrderIdsCustomField && productOrderIdsCustomField.value) {
-          const productOrderIds = Array.isArray(productOrderIdsCustomField.value) 
-            ? productOrderIdsCustomField.value 
-            : [productOrderIdsCustomField.value];
-          
-          if (productOrderIds.length === 1) {
+          const productOrderIds = normalizeOrderNumbers(productOrderIdsCustomField.value);
+
+          if (productOrderIds.length > 0) {
+            const productOrderValue = productOrderIdsField.type === 'multiselect'
+              ? productOrderIds
+              : productOrderIds.join(', ');
+
             customFields.push({
               id: productOrderIdsField.id,
-              value: productOrderIds[0]
+              value: productOrderValue
             });
-          } else if (productOrderIds.length > 1) {
-            additionalComment = '\n\nNote: The parent ticket has multiple Product Order IDs. Please manually enter the correct Product Order ID value.';
+          }
+
+          if (productOrderIds.length > 1) {
+            additionalComment = '\n\nWarning: Multiple Prod Order IDs were copied from the original ticket. Ensure only ONE Prod Order ID remains before submitting the credit memo for approval.';
           }
         }
       }
@@ -237,7 +257,8 @@ const App = () => {
             body: `Credit memo created from ticket #${currentTicketId}${additionalComment}`,
             public: false
           },
-          requester_id: currentUserId,
+          requester_id: parentTicket.requester_id || currentUserId,
+          submitter_id: currentUserId,
           ticket_form_id: creditMemoFormId,
           custom_fields: customFields
         }
