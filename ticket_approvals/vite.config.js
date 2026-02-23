@@ -22,6 +22,7 @@ export default ({ mode }) => {
         targets: [
           { src: resolve(__dirname, 'src/assets/*'), dest: './' },
           { src: resolve(__dirname, 'src/manifest.json'), dest: '../', modifier: changeLocation },
+          { src: resolve(__dirname, 'src/zcli.apps.config.json'), dest: '../' },
           {
             src: resolve(__dirname, 'src/translations/en.json'),
             dest: '../translations',

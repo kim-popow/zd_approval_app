@@ -800,6 +800,13 @@ export const ApprovalEvaluator = ({ rules }) => {
 
   const isFullyApproved = currentCustomStatusId === customStatusIdsRef.current.approved;
   const isDeclined = currentCustomStatusId === customStatusIdsRef.current.declined;
+  const isPendingApproval = currentCustomStatusId === customStatusIdsRef.current.pending_approval;
+  const isPreSubmission =
+    currentCustomStatusId &&
+    currentCustomStatusId !== customStatusIdsRef.current.submit_for_approval &&
+    currentCustomStatusId !== customStatusIdsRef.current.pending_approval &&
+    currentCustomStatusId !== customStatusIdsRef.current.approved &&
+    currentCustomStatusId !== customStatusIdsRef.current.declined;
 
   const currentLevelIndex = evaluation.approvalLevels.findIndex(
     level => level.groupId === String(currentGroup?.id)
@@ -818,6 +825,20 @@ export const ApprovalEvaluator = ({ rules }) => {
         <Alert type="success">All Approvals Complete</Alert>
       ) : isDeclined ? (
         <Alert type="error">Request Declined</Alert>
+      ) : isPreSubmission ? (
+        <Alert type="info">
+          <div style={{ fontWeight: 700, fontSize: '14px', lineHeight: 1.5 }}>
+            <div style={{ marginBottom: '8px' }}>Ready to Submit for Approval</div>
+            <ol style={{ margin: 0, paddingLeft: '20px' }}>
+              <li>First choose a credit type (Credit Memo or Check Request)</li>
+              <li>Fill out all required fields</li>
+              <li>Add an internal comment for why the credit memo is being requested.</li>
+              <li>Submit the credit memo by using "Submit for Approval" status - Do NOT use any other statuses</li>
+              <li>If your credit memo is within your approval level the ticket will update to approved automatically and be submitted to SAP - otherwise it will route for approval.</li>
+              <li>The system will auto-solve all credit tickets so no need to manage the status beyond submitting it for approval.</li>
+            </ol>
+          </div>
+        </Alert>
       ) : evaluation.requiresApproval ? (
         <Alert type="warning">Approval Required</Alert>
       ) : (
@@ -836,8 +857,16 @@ export const ApprovalEvaluator = ({ rules }) => {
             <strong>Current Group:</strong> {currentGroup ? currentGroup.name : 'Not assigned'}
           </div>
           <div>
-            <StatusBadge status={isFullyApproved ? 'approved' : isDeclined ? 'declined' : evaluation.requiresApproval ? 'pending' : 'approved'}>
-              {isFullyApproved ? 'FULLY APPROVED' : isDeclined ? 'DECLINED' : evaluation.requiresApproval ? 'REQUIRES APPROVAL' : 'NO APPROVAL NEEDED'}
+            <StatusBadge status={isFullyApproved ? 'approved' : isDeclined ? 'declined' : (evaluation.requiresApproval || isPendingApproval || isPreSubmission) ? 'pending' : 'approved'}>
+              {isFullyApproved
+                ? 'FULLY APPROVED'
+                : isDeclined
+                  ? 'DECLINED'
+                  : isPreSubmission
+                    ? 'READY TO SUBMIT'
+                    : evaluation.requiresApproval || isPendingApproval
+                      ? 'REQUIRES APPROVAL'
+                      : 'NO APPROVAL NEEDED'}
             </StatusBadge>
           </div>
         </EvaluationSummary>
