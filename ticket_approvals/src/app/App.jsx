@@ -25,9 +25,38 @@ const App = () => {
   const [successMessage, setSuccessMessage] = useState(null);
 
   useEffect(() => {
+    let resizeObserver = null;
+    let resizeInterval = null;
+
+    const resizeToContent = async () => {
+      try {
+        const root = document.getElementById('root');
+        const contentHeight = root ? root.scrollHeight : 0;
+        const height = Math.max(700, contentHeight + 24);
+        await window.zafClient.invoke('resize', { width: '100%', height: `${height}px` });
+      } catch (resizeError) {
+        // Ignore transient resize failures.
+      }
+    };
+
+    const setupAutoResize = () => {
+      const root = document.getElementById('root');
+      if (!root) return;
+
+      resizeObserver = new ResizeObserver(() => {
+        resizeToContent();
+      });
+      resizeObserver.observe(root);
+
+      // Fallback for dynamic content changes that may not trigger observer.
+      resizeInterval = window.setInterval(() => {
+        resizeToContent();
+      }, 1000);
+    };
+
     const initializeApp = async () => {
       try {
-        await window.zafClient.invoke('resize', { width: '100%', height: '600px' });
+        await window.zafClient.invoke('resize', { width: '100%', height: '700px' });
         
         const colorSchemeData = await window.zafClient.get('colorScheme');
         setBase(colorSchemeData.colorScheme);
@@ -91,6 +120,8 @@ const App = () => {
         
         setTicketFields(data.ticketFields || []);
         setLoading(false);
+        setupAutoResize();
+        resizeToContent();
       } catch (error) {
         console.error('Error initializing app:', error);
         setError(JSON.stringify(error));
@@ -99,6 +130,15 @@ const App = () => {
     };
 
     initializeApp();
+
+    return () => {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      if (resizeInterval) {
+        window.clearInterval(resizeInterval);
+      }
+    };
   }, []);
 
   const handleCreateCreditMemo = async () => {

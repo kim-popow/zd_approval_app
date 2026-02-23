@@ -829,12 +829,12 @@ export const ApprovalEvaluator = ({ rules }) => {
         <Alert type="info">
           <div style={{ fontWeight: 700, fontSize: '14px', lineHeight: 1.5 }}>
             <div style={{ marginBottom: '8px' }}>Ready to Submit for Approval</div>
-            <ol style={{ margin: 0, paddingLeft: '20px' }}>
-              <li>First choose a credit type (Credit Memo or Check Request)</li>
-              <li>Fill out all required fields</li>
-              <li>Add an internal comment for why the credit memo is being requested.</li>
-              <li>Submit the credit memo by using "Submit for Approval" status - Do NOT use any other statuses</li>
-              <li>If your credit memo is within your approval level the ticket will update to approved automatically and be submitted to SAP - otherwise it will route for approval.</li>
+            <ol style={{ margin: 0, paddingLeft: '24px', listStyleType: 'decimal', listStylePosition: 'outside' }}>
+              <li style={{ marginBottom: '6px' }}>First choose a credit type (Credit Memo or Check Request)</li>
+              <li style={{ marginBottom: '6px' }}>Fill out all required fields</li>
+              <li style={{ marginBottom: '6px' }}>Add an internal comment for why the credit memo is being requested.</li>
+              <li style={{ marginBottom: '6px' }}>Submit the credit memo by using "Submit for Approval" status - Do NOT use any other statuses</li>
+              <li style={{ marginBottom: '6px' }}>If your credit memo is within your approval level the ticket will update to approved automatically and be submitted to SAP - otherwise it will route for approval.</li>
               <li>The system will auto-solve all credit tickets so no need to manage the status beyond submitting it for approval.</li>
             </ol>
           </div>
