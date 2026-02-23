@@ -870,13 +870,13 @@ export const ApprovalEvaluator = ({ rules }) => {
           }}
         >
           <div style={{ fontWeight: 700, fontSize: '14px', lineHeight: 1.5 }}>
-            <div style={{ marginBottom: '8px' }}>Ready to Submit for Approval</div>
+            <div style={{ marginBottom: '10px' }}>Steps to Create a Credit Memo</div>
             <ol style={{ margin: 0, paddingLeft: '24px', listStyleType: 'decimal', listStylePosition: 'outside' }}>
-              <li style={{ marginBottom: '6px' }}>Choose a credit type: Credit Memo or Check Request.</li>
-              <li style={{ marginBottom: '6px' }}>Complete all required fields.</li>
-              <li style={{ marginBottom: '6px' }}>Add an internal comment explaining the request.</li>
-              <li style={{ marginBottom: '6px' }}>Set status to &quot;Submit for Approval&quot; only.</li>
-              <li style={{ marginBottom: '6px' }}>If within your limit, the credit auto-approves and is sent to SAP; otherwise it routes for approval.</li>
+              <li style={{ marginBottom: '8px' }}>Choose a credit type: Credit Memo or Check Request.</li>
+              <li style={{ marginBottom: '8px' }}>Complete all required fields.</li>
+              <li style={{ marginBottom: '8px' }}>Add an internal comment explaining the request.</li>
+              <li style={{ marginBottom: '8px' }}>Set status to &quot;Submit for Approval&quot; only.</li>
+              <li style={{ marginBottom: '8px' }}>If within your limit, the credit auto-approves and is sent to SAP; otherwise it routes for approval.</li>
               <li>After submission, no further status updates are needed. The system auto-solves credit tickets.</li>
             </ol>
           </div>
