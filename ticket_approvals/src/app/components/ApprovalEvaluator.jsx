@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Alert, Well } from '@zendeskgarden/react-notifications';
+import { Button } from '@zendeskgarden/react-buttons';
+import { Modal, Header, Body, Footer, Close } from '@zendeskgarden/react-modals';
+import { Field, Label, Textarea } from '@zendeskgarden/react-forms';
 import { Dots } from '@zendeskgarden/react-loaders';
 import {
   EvaluationContainer,
@@ -8,7 +11,8 @@ import {
   CriteriaItem,
   StatusBadge,
   WorkflowTracker,
-  LevelBadge
+  LevelBadge,
+  ButtonGroup
 } from '../styles/ApprovalEvaluator';
 
 export const ApprovalEvaluator = ({ rules }) => {
@@ -18,6 +22,8 @@ export const ApprovalEvaluator = ({ rules }) => {
   const [evaluation, setEvaluation] = useState(null);
   const [currentGroup, setCurrentGroup] = useState(null);
   const [canApprove, setCanApprove] = useState(false);
+  const [showDeclineModal, setShowDeclineModal] = useState(false);
+  const [declineReason, setDeclineReason] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [currentCustomStatusId, setCurrentCustomStatusId] = useState(null);
   const customStatusIdsRef = useRef({});
@@ -237,9 +243,6 @@ export const ApprovalEvaluator = ({ rules }) => {
 
           const ticket = ticketResponse.ticket;
           const customStatusId = ticket.custom_status_id;
-          const previousStatusId = previousStatusRef.current;
-          const statusChanged = customStatusId !== previousStatusId;
-
           if (customStatusId === customStatusIdsRef.current.submit_for_approval) {
             if (!autoAssignProcessedRef.current) {
               await autoAssignToLevel1();
@@ -248,16 +251,32 @@ export const ApprovalEvaluator = ({ rules }) => {
             return;
           }
 
-          if (!statusChanged) {
-            return;
+          // Prevent manual "Approved" status until final approval level is complete.
+          if (
+            customStatusId === customStatusIdsRef.current.approved &&
+            evaluationRef.current?.approvalLevels?.length > 0
+          ) {
+            const currentLevelIndex = evaluationRef.current.approvalLevels.findIndex(
+              level => level.groupId === String(ticket.group_id)
+            );
+            const isLastLevel = currentLevelIndex === evaluationRef.current.approvalLevels.length - 1;
+            if (!isLastLevel) {
+              await window.zafClient.request({
+                url: `/api/v2/tickets/${ticketId}.json`,
+                type: 'PUT',
+                contentType: 'application/json',
+                data: JSON.stringify({
+                  ticket: {
+                    custom_status_id: customStatusIdsRef.current.pending_approval,
+                    comment: {
+                      body: 'Status reset to Pending Approval. Use the app Approve button to progress approval levels.',
+                      public: false
+                    }
+                  }
+                })
+              });
+            }
           }
-
-          if (customStatusId === customStatusIdsRef.current.approved) {
-            await handleApprove(ticket.id, true);
-          } else if (customStatusId === customStatusIdsRef.current.declined) {
-            await handleDecline(ticket.id, true);
-          }
-
           previousStatusRef.current = customStatusId;
         } catch (error) {
           console.error('Error checking ticket status after save:', error);
@@ -538,7 +557,7 @@ export const ApprovalEvaluator = ({ rules }) => {
     };
   };
 
-  const handleApprove = async (ticketId = ticketData?.['ticket.id'], fromStatusChange = false) => {
+  const handleApprove = async (ticketId = ticketData?.['ticket.id']) => {
     const activeEvaluation = evaluationRef.current;
     const activeGroup = currentGroupRef.current;
     const activeUser = currentUserRef.current;
@@ -556,7 +575,7 @@ export const ApprovalEvaluator = ({ rules }) => {
 
     const userGroupIds = activeUser?.groups?.map(group => group.id) || [];
     const isInCurrentGroup = activeGroup?.id && userGroupIds.includes(activeGroup.id);
-    if (fromStatusChange && !isInCurrentGroup) {
+    if (!isInCurrentGroup) {
       setError(`Only members of ${activeGroup?.name || 'the current approval group'} can approve this request.`);
       return;
     }
@@ -613,9 +632,7 @@ export const ApprovalEvaluator = ({ rules }) => {
         setSuccessMessage(`Approved and assigned to ${nextLevel.groupName} (Level ${nextLevel.level})`);
       }
 
-      if (fromStatusChange) {
-        await loadTicketData();
-      }
+      await loadTicketData();
 
       setTimeout(() => setSuccessMessage(''), 5000);
     } catch (error) {
@@ -626,15 +643,16 @@ export const ApprovalEvaluator = ({ rules }) => {
     }
   };
 
-  const handleDecline = async (ticketId = ticketData?.['ticket.id'], fromStatusChange = false) => {
+  const handleDecline = async (ticketId = ticketData?.['ticket.id']) => {
     const activeUser = currentUserRef.current;
     const activeGroup = currentGroupRef.current;
     const activeRequester = originalRequesterRef.current;
     if (!ticketId || !activeUser) return;
+    if (!declineReason.trim()) return;
 
     const userGroupIds = activeUser?.groups?.map(group => group.id) || [];
     const isInCurrentGroup = activeGroup?.id && userGroupIds.includes(activeGroup.id);
-    if (fromStatusChange && !isInCurrentGroup) {
+    if (!isInCurrentGroup) {
       setError(`Only members of ${activeGroup?.name || 'the current approval group'} can decline this request.`);
       return;
     }
@@ -645,7 +663,7 @@ export const ApprovalEvaluator = ({ rules }) => {
         ticket: {
           custom_status_id: customStatusIdsRef.current.declined,
           comment: {
-            body: `Request declined by ${activeUser.name}.`,
+            body: `Request declined by ${activeUser.name}.\n\nReason: ${declineReason}`,
             public: false
           }
         }
@@ -666,11 +684,10 @@ export const ApprovalEvaluator = ({ rules }) => {
       setCurrentGroup(null);
       currentGroupRef.current = null;
       setCurrentCustomStatusId(customStatusIdsRef.current.declined);
+      setShowDeclineModal(false);
+      setDeclineReason('');
       setSuccessMessage('Request declined and assigned directly to requester');
-
-      if (fromStatusChange) {
-        await loadTicketData();
-      }
+      await loadTicketData();
 
       setTimeout(() => setSuccessMessage(''), 5000);
     } catch (error) {
@@ -795,17 +812,57 @@ export const ApprovalEvaluator = ({ rules }) => {
       {currentLevel && !isFullyApproved && !isDeclined && (
         <div style={{ marginTop: '16px' }}>
           {canApprove ? (
-            <Alert type="info">
-              Use the ticket status control to take action: set status to <strong>Approved</strong> to move
-              to the next approval level (or finalize if this is the last level), or set status to
-              <strong> Declined</strong> to decline the request.
-            </Alert>
+            <ButtonGroup>
+              <Button
+                isPrimary
+                onClick={() => handleApprove()}
+              >
+                {currentLevelIndex === evaluation.approvalLevels.length - 1
+                  ? 'Final Approval'
+                  : `Approve & Assign to Level ${evaluation.approvalLevels[currentLevelIndex + 1].level}`}
+              </Button>
+              <Button
+                isDanger
+                onClick={() => setShowDeclineModal(true)}
+              >
+                Decline
+              </Button>
+            </ButtonGroup>
           ) : (
             <Alert type="info">
               You are not a member of the current approval group. Only members of {currentGroup?.name} can approve or decline this request.
             </Alert>
           )}
         </div>
+      )}
+
+      {showDeclineModal && (
+        <Modal onClose={() => setShowDeclineModal(false)}>
+          <Header>Decline Request</Header>
+          <Body>
+            <Field>
+              <Label>Reason for declining (required)</Label>
+              <Textarea
+                value={declineReason}
+                onChange={(e) => setDeclineReason(e.target.value)}
+                rows={4}
+                placeholder="Please provide a reason for declining this request..."
+              />
+            </Field>
+          </Body>
+          <Footer>
+            <Button onClick={() => setShowDeclineModal(false)}>Cancel</Button>
+            <Button
+              isPrimary
+              isDanger
+              onClick={() => handleDecline()}
+              disabled={!declineReason.trim()}
+            >
+              Decline Request
+            </Button>
+          </Footer>
+          <Close aria-label="Close modal" />
+        </Modal>
       )}
     </EvaluationContainer>
   );

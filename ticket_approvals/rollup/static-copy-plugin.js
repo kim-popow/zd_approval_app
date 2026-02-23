@@ -1,4 +1,5 @@
 import path from 'node:path'
+import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import glob from 'fast-glob'
 
@@ -13,7 +14,7 @@ export default function StaticCopy({ targets }) {
       const rootPath = config.build.outDir
       await Promise.all(
         targets.map(async ({ src, dest, modifier = (data) => data }) => {
-          const paths = await glob(src)
+          const paths = await resolveSourcePaths(src)
           const destinationPath = path.resolve(rootPath, dest)
           await processFiles(paths, destinationPath, modifier)
         })
@@ -46,4 +47,22 @@ async function ensureDirectory(src) {
   } catch (error) {
     console.error(`Error creating directory ${src}: ${error}`)
   }
+}
+
+function hasGlobPattern(input) {
+  return /[*?[\]{}()!+@]/.test(input);
+}
+
+async function resolveSourcePaths(src) {
+  if (!hasGlobPattern(src) && fsSync.existsSync(src)) {
+    return [src];
+  }
+
+  const normalizedPattern = src.replace(/\\/g, '/');
+  return glob(normalizedPattern, {
+    absolute: true,
+    onlyFiles: true,
+    dot: true,
+    windowsPathsNoEscape: true
+  });
 }
