@@ -34,6 +34,7 @@ export const ApprovalEvaluator = ({ rules }) => {
   const currentGroupRef = useRef(null);
   const currentUserRef = useRef(null);
   const originalRequesterRef = useRef(null);
+  const ticketCreatorIdRef = useRef(null);
   const evaluationRef = useRef(null);
 
   const fetchRulesFromCustomObject = async () => {
@@ -243,10 +244,80 @@ export const ApprovalEvaluator = ({ rules }) => {
 
           const ticket = ticketResponse.ticket;
           const customStatusId = ticket.custom_status_id;
+          const previousStatusId = previousStatusRef.current;
+          const currentUser = currentUserRef.current;
+          const userGroupIds = currentUser?.groups?.map(group => group.id) || [];
+          const isCurrentUserInCurrentGroup = ticket.group_id && userGroupIds.includes(ticket.group_id);
+          const isCreator = Boolean(
+            currentUser?.id &&
+            ticketCreatorIdRef.current &&
+            currentUser.id === ticketCreatorIdRef.current
+          );
+
           if (customStatusId === customStatusIdsRef.current.submit_for_approval) {
             if (!autoAssignProcessedRef.current) {
               await autoAssignToLevel1();
               previousStatusRef.current = customStatusIdsRef.current.submit_for_approval;
+            }
+            return;
+          }
+
+          // Original creator can only move status to "Submit for Approval".
+          if (
+            isCreator &&
+            customStatusId !== previousStatusId &&
+            customStatusId !== customStatusIdsRef.current.submit_for_approval
+          ) {
+            try {
+              isProcessingStatusActionRef.current = true;
+              await window.zafClient.request({
+                url: `/api/v2/tickets/${ticketId}.json`,
+                type: 'PUT',
+                contentType: 'application/json',
+                data: JSON.stringify({
+                  ticket: {
+                    custom_status_id: previousStatusId,
+                    comment: {
+                      body: 'Status change blocked. Use "Submit for Approval" to start approval.',
+                      public: false
+                    }
+                  }
+                })
+              });
+              setError('Status change blocked. Use "Submit for Approval" to start approval.');
+              await loadTicketData();
+            } finally {
+              isProcessingStatusActionRef.current = false;
+            }
+            return;
+          }
+
+          // Approvers cannot use status dropdown to advance levels while pending approval.
+          if (
+            previousStatusId === customStatusIdsRef.current.pending_approval &&
+            customStatusId !== customStatusIdsRef.current.pending_approval &&
+            isCurrentUserInCurrentGroup
+          ) {
+            try {
+              isProcessingStatusActionRef.current = true;
+              await window.zafClient.request({
+                url: `/api/v2/tickets/${ticketId}.json`,
+                type: 'PUT',
+                contentType: 'application/json',
+                data: JSON.stringify({
+                  ticket: {
+                    custom_status_id: customStatusIdsRef.current.pending_approval,
+                    comment: {
+                      body: 'Status kept as Pending Approval. Use app buttons to advance to the next approval level.',
+                      public: false
+                    }
+                  }
+                })
+              });
+              setError('Status change blocked. Use the app buttons to advance the credit to the next level.');
+              await loadTicketData();
+            } finally {
+              isProcessingStatusActionRef.current = false;
             }
             return;
           }
@@ -305,6 +376,7 @@ export const ApprovalEvaluator = ({ rules }) => {
 
       const currentGroupId = ticketResponse.ticket.group_id;
       const currentStatusId = ticketResponse.ticket.custom_status_id;
+      ticketCreatorIdRef.current = ticketResponse.ticket.submitter_id || data['ticket.requester']?.id || null;
       
       setCurrentCustomStatusId(currentStatusId);
       previousStatusRef.current = currentStatusId;
