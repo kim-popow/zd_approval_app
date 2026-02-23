@@ -9,8 +9,9 @@ export const EvaluationContainer = styled.div`
 
 export const EvaluationSummary = styled.div`
   padding: 16px;
-  background-color: ${props => props.theme.palette.grey[100]};
+  background-color: #fff8e8;
   border-radius: 4px;
+  border: 1px solid #f0dfb9;
   
   h3 {
     font-size: 16px;

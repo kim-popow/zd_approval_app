@@ -888,16 +888,23 @@ export const ApprovalEvaluator = ({ rules }) => {
       ) : isDeclined ? (
         <Alert type="error">Request Declined</Alert>
       ) : isPreSubmission ? (
-        <Alert type="info">
+        <Alert
+          type="info"
+          style={{
+            backgroundColor: '#fff8e8',
+            borderColor: '#f0dfb9',
+            color: '#4a4a4a'
+          }}
+        >
           <div style={{ fontWeight: 700, fontSize: '14px', lineHeight: 1.5 }}>
             <div style={{ marginBottom: '8px' }}>Ready to Submit for Approval</div>
             <ol style={{ margin: 0, paddingLeft: '24px', listStyleType: 'decimal', listStylePosition: 'outside' }}>
-              <li style={{ marginBottom: '6px' }}>First choose a credit type (Credit Memo or Check Request)</li>
-              <li style={{ marginBottom: '6px' }}>Fill out all required fields</li>
-              <li style={{ marginBottom: '6px' }}>Add an internal comment for why the credit memo is being requested.</li>
-              <li style={{ marginBottom: '6px' }}>Submit the credit memo by using "Submit for Approval" status - Do NOT use any other statuses</li>
-              <li style={{ marginBottom: '6px' }}>If your credit memo is within your approval level the ticket will update to approved automatically and be submitted to SAP - otherwise it will route for approval.</li>
-              <li>The system will auto-solve all credit tickets so no need to manage the status beyond submitting it for approval.</li>
+              <li style={{ marginBottom: '6px' }}>Choose a credit type: Credit Memo or Check Request.</li>
+              <li style={{ marginBottom: '6px' }}>Complete all required fields.</li>
+              <li style={{ marginBottom: '6px' }}>Add an internal comment explaining the request.</li>
+              <li style={{ marginBottom: '6px' }}>Set status to "Submit for Approval" only.</li>
+              <li style={{ marginBottom: '6px' }}>If within your limit, the credit auto-approves and is sent to SAP; otherwise it routes for approval.</li>
+              <li>After submission, no further status updates are needed. The system auto-solves credit tickets.</li>
             </ol>
           </div>
         </Alert>
