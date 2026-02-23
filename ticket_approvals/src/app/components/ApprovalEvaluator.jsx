@@ -16,6 +16,7 @@ import {
 } from '../styles/ApprovalEvaluator';
 
 export const ApprovalEvaluator = ({ rules }) => {
+  const APPROVAL_STARTED_TAG = 'credit_approval_started';
   const [ticketData, setTicketData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -36,7 +37,7 @@ export const ApprovalEvaluator = ({ rules }) => {
   const currentUserRef = useRef(null);
   const originalRequesterRef = useRef(null);
   const originalCreatorRef = useRef(null);
-  const ticketCreatorIdRef = useRef(null);
+  const hasBeenSubmittedRef = useRef(false);
   const evaluationRef = useRef(null);
 
   const fetchRulesFromCustomObject = async () => {
@@ -160,6 +161,7 @@ export const ApprovalEvaluator = ({ rules }) => {
           data: JSON.stringify({
             ticket: {
               custom_status_id: customStatusIdsRef.current.approved,
+              additional_tags: [APPROVAL_STARTED_TAG],
               comment: {
                 body: 'Credit memo automatically approved based on auto-approve rules.',
                 public: false
@@ -189,6 +191,7 @@ export const ApprovalEvaluator = ({ rules }) => {
             ticket: {
               group_id: level1.groupId,
               custom_status_id: customStatusIdsRef.current.pending_approval,
+              additional_tags: [APPROVAL_STARTED_TAG],
               comment: {
                 body: `Ticket automatically assigned to ${level1.groupName} (Level ${level1.level}) for approval.`,
                 public: false
@@ -280,14 +283,9 @@ export const ApprovalEvaluator = ({ rules }) => {
           const ticket = ticketResponse.ticket;
           const customStatusId = ticket.custom_status_id;
           const previousStatusId = previousStatusRef.current;
-          const currentUser = currentUserRef.current;
-          const userGroupIds = currentUser?.groups?.map(group => group.id) || [];
-          const isCurrentUserInCurrentGroup = ticket.group_id && userGroupIds.includes(ticket.group_id);
-          const isCreator = Boolean(
-            currentUser?.id &&
-            ticketCreatorIdRef.current &&
-            currentUser.id === ticketCreatorIdRef.current
-          );
+          const statusChanged = customStatusId !== previousStatusId;
+          const submittedAlready =
+            hasBeenSubmittedRef.current || (ticket.tags || []).includes(APPROVAL_STARTED_TAG);
 
           if (customStatusId === customStatusIdsRef.current.submit_for_approval) {
             if (!autoAssignProcessedRef.current) {
@@ -297,12 +295,12 @@ export const ApprovalEvaluator = ({ rules }) => {
             return;
           }
 
-          // Original creator can only move status to "Submit for Approval".
-          if (
-            isCreator &&
-            customStatusId !== previousStatusId &&
-            customStatusId !== customStatusIdsRef.current.submit_for_approval
-          ) {
+          if (!statusChanged) {
+            return;
+          }
+
+          // Before first submission, only "Submit for Approval" is allowed.
+          if (!submittedAlready) {
             try {
               isProcessingStatusActionRef.current = true;
               await window.zafClient.request({
@@ -313,13 +311,13 @@ export const ApprovalEvaluator = ({ rules }) => {
                   ticket: {
                     custom_status_id: previousStatusId,
                     comment: {
-                      body: 'Status change blocked. Use "Submit for Approval" to start approval.',
+                      body: 'Use "Submit for Approval" to submit this credit memo ticket.',
                       public: false
                     }
                   }
                 })
               });
-              setError('Status change blocked. Use "Submit for Approval" to start approval.');
+              setError('Use "Submit for Approval" to submit this credit memo ticket.');
               await loadTicketData();
             } finally {
               isProcessingStatusActionRef.current = false;
@@ -327,12 +325,8 @@ export const ApprovalEvaluator = ({ rules }) => {
             return;
           }
 
-          // Approvers cannot use status dropdown to advance levels while pending approval.
-          if (
-            previousStatusId === customStatusIdsRef.current.pending_approval &&
-            customStatusId !== customStatusIdsRef.current.pending_approval &&
-            isCurrentUserInCurrentGroup
-          ) {
+          // After first submission, status changes must not be used to move approvals.
+          if (submittedAlready) {
             try {
               isProcessingStatusActionRef.current = true;
               await window.zafClient.request({
@@ -341,47 +335,20 @@ export const ApprovalEvaluator = ({ rules }) => {
                 contentType: 'application/json',
                 data: JSON.stringify({
                   ticket: {
-                    custom_status_id: customStatusIdsRef.current.pending_approval,
+                    custom_status_id: previousStatusId,
                     comment: {
-                      body: 'Status kept as Pending Approval. Use app buttons to advance to the next approval level.',
+                      body: 'To approve or decline a credit memo ticket, please use the buttons within the approval app.',
                       public: false
                     }
                   }
                 })
               });
-              setError('Status change blocked. Use the app buttons to advance the credit to the next level.');
+              setError('To approve or decline a credit memo ticket, please use the buttons within the approval app.');
               await loadTicketData();
             } finally {
               isProcessingStatusActionRef.current = false;
             }
             return;
-          }
-
-          // Prevent manual "Approved" status until final approval level is complete.
-          if (
-            customStatusId === customStatusIdsRef.current.approved &&
-            evaluationRef.current?.approvalLevels?.length > 0
-          ) {
-            const currentLevelIndex = evaluationRef.current.approvalLevels.findIndex(
-              level => level.groupId === String(ticket.group_id)
-            );
-            const isLastLevel = currentLevelIndex === evaluationRef.current.approvalLevels.length - 1;
-            if (!isLastLevel) {
-              await window.zafClient.request({
-                url: `/api/v2/tickets/${ticketId}.json`,
-                type: 'PUT',
-                contentType: 'application/json',
-                data: JSON.stringify({
-                  ticket: {
-                    custom_status_id: customStatusIdsRef.current.pending_approval,
-                    comment: {
-                      body: 'Status reset to Pending Approval. Use the app Approve button to progress approval levels.',
-                      public: false
-                    }
-                  }
-                })
-              });
-            }
           }
           previousStatusRef.current = customStatusId;
         } catch (error) {
@@ -411,7 +378,13 @@ export const ApprovalEvaluator = ({ rules }) => {
 
       const currentGroupId = ticketResponse.ticket.group_id;
       const currentStatusId = ticketResponse.ticket.custom_status_id;
-      ticketCreatorIdRef.current = ticketResponse.ticket.submitter_id || data['ticket.requester']?.id || null;
+      const ticketTags = ticketResponse.ticket.tags || [];
+      hasBeenSubmittedRef.current =
+        ticketTags.includes(APPROVAL_STARTED_TAG) ||
+        currentStatusId === customStatusIdsRef.current.submit_for_approval ||
+        currentStatusId === customStatusIdsRef.current.pending_approval ||
+        currentStatusId === customStatusIdsRef.current.approved ||
+        currentStatusId === customStatusIdsRef.current.declined;
       
       setCurrentCustomStatusId(currentStatusId);
       previousStatusRef.current = currentStatusId;
@@ -902,7 +875,7 @@ export const ApprovalEvaluator = ({ rules }) => {
               <li style={{ marginBottom: '6px' }}>Choose a credit type: Credit Memo or Check Request.</li>
               <li style={{ marginBottom: '6px' }}>Complete all required fields.</li>
               <li style={{ marginBottom: '6px' }}>Add an internal comment explaining the request.</li>
-              <li style={{ marginBottom: '6px' }}>Set status to "Submit for Approval" only.</li>
+              <li style={{ marginBottom: '6px' }}>Set status to &quot;Submit for Approval&quot; only.</li>
               <li style={{ marginBottom: '6px' }}>If within your limit, the credit auto-approves and is sent to SAP; otherwise it routes for approval.</li>
               <li>After submission, no further status updates are needed. The system auto-solves credit tickets.</li>
             </ol>
