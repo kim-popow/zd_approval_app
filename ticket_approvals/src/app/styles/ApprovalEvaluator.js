@@ -68,6 +68,7 @@ export const StatusBadge = styled.span`
   background-color: ${props => {
     if (props.status === 'approved') return '#4caf50';
     if (props.status === 'declined') return '#d32f2f';
+    if (props.status === 'cancelled') return '#757575';
     if (props.status === 'requires_approval') return '#ff9800';
     return '#9e9e9e';
   }};

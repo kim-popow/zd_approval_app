@@ -244,11 +244,17 @@ export const ApprovalEvaluator = ({ rules }) => {
         s.agent_label.toLowerCase().includes('declined')
       );
 
+      const cancelledStatus = customStatuses.find(s => 
+        s.agent_label && 
+        s.agent_label.toLowerCase().includes('cancel')
+      );
+
       customStatusIdsRef.current = {
         submit_for_approval: submitForApprovalStatus?.id,
         pending_approval: pendingApprovalStatus?.id,
         approved: approvedStatus?.id,
-        declined: declinedStatus?.id
+        declined: declinedStatus?.id,
+        cancelled: cancelledStatus?.id
       };
 
       setupEventListeners();
@@ -296,6 +302,12 @@ export const ApprovalEvaluator = ({ rules }) => {
           }
 
           if (!statusChanged) {
+            return;
+          }
+
+          // "Cancelled" is always allowed so users can cancel records that are no longer needed or declined.
+          if (customStatusIdsRef.current.cancelled != null && customStatusId === customStatusIdsRef.current.cancelled) {
+            previousStatusRef.current = customStatusId;
             return;
           }
 
@@ -835,13 +847,15 @@ export const ApprovalEvaluator = ({ rules }) => {
 
   const isFullyApproved = currentCustomStatusId === customStatusIdsRef.current.approved;
   const isDeclined = currentCustomStatusId === customStatusIdsRef.current.declined;
+  const isCancelled = currentCustomStatusId === customStatusIdsRef.current.cancelled;
   const isPendingApproval = currentCustomStatusId === customStatusIdsRef.current.pending_approval;
   const isPreSubmission =
     currentCustomStatusId &&
     currentCustomStatusId !== customStatusIdsRef.current.submit_for_approval &&
     currentCustomStatusId !== customStatusIdsRef.current.pending_approval &&
     currentCustomStatusId !== customStatusIdsRef.current.approved &&
-    currentCustomStatusId !== customStatusIdsRef.current.declined;
+    currentCustomStatusId !== customStatusIdsRef.current.declined &&
+    currentCustomStatusId !== customStatusIdsRef.current.cancelled;
 
   const currentLevelIndex = evaluation.approvalLevels.findIndex(
     level => level.groupId === String(currentGroup?.id)
@@ -860,6 +874,8 @@ export const ApprovalEvaluator = ({ rules }) => {
         <Alert type="success">All Approvals Complete</Alert>
       ) : isDeclined ? (
         <Alert type="error">Request Declined</Alert>
+      ) : isCancelled ? (
+        <Alert type="info">This record has been cancelled.</Alert>
       ) : isPreSubmission ? (
         <Alert
           type="info"
@@ -903,12 +919,14 @@ export const ApprovalEvaluator = ({ rules }) => {
             <strong>Current Group:</strong> {currentGroup ? currentGroup.name : 'Not assigned'}
           </div>
           <div>
-            <StatusBadge status={isFullyApproved ? 'approved' : isDeclined ? 'declined' : (evaluation.requiresApproval || isPendingApproval || isPreSubmission) ? 'pending' : 'approved'}>
+            <StatusBadge status={isFullyApproved ? 'approved' : isDeclined ? 'declined' : isCancelled ? 'cancelled' : (evaluation.requiresApproval || isPendingApproval || isPreSubmission) ? 'pending' : 'approved'}>
               {isFullyApproved
                 ? 'FULLY APPROVED'
                 : isDeclined
                   ? 'DECLINED'
-                  : isPreSubmission
+                  : isCancelled
+                    ? 'CANCELLED'
+                    : isPreSubmission
                     ? 'READY TO SUBMIT'
                     : evaluation.requiresApproval || isPendingApproval
                       ? 'REQUIRES APPROVAL'
@@ -918,7 +936,7 @@ export const ApprovalEvaluator = ({ rules }) => {
         </EvaluationSummary>
       </Well>
 
-      {evaluation.approvalLevels.length > 0 && (
+      {evaluation.approvalLevels.length > 0 && !isCancelled && (
         <div style={{ marginTop: '16px' }}>
           <h3>Approval Workflow</h3>
           <WorkflowTracker>
@@ -939,7 +957,7 @@ export const ApprovalEvaluator = ({ rules }) => {
         </div>
       )}
 
-      {evaluation.triggeredRules.length > 0 && (
+      {evaluation.triggeredRules.length > 0 && !isCancelled && (
         <div style={{ marginTop: '16px' }}>
           <h3>Evaluation Criteria</h3>
           <CriteriaList>
@@ -956,7 +974,7 @@ export const ApprovalEvaluator = ({ rules }) => {
         </div>
       )}
 
-      {currentLevel && !isFullyApproved && !isDeclined && (
+      {currentLevel && !isFullyApproved && !isDeclined && !isCancelled && (
         <div style={{ marginTop: '16px' }}>
           {canApprove ? (
             <ButtonGroup>
