@@ -39,6 +39,9 @@ export const ApprovalEvaluator = ({ rules }) => {
   const originalCreatorRef = useRef(null);
   const hasBeenSubmittedRef = useRef(false);
   const evaluationRef = useRef(null);
+  const loadTicketDataRef = useRef(async () => {});
+  const lifecycleHandlersRegisteredRef = useRef(false);
+  const ticketUpdatedRefreshTimerRef = useRef(null);
 
   const fetchRulesFromCustomObject = async () => {
     try {
@@ -174,7 +177,7 @@ export const ApprovalEvaluator = ({ rules }) => {
         
         // Refresh the app to show the approved status
         setTimeout(() => {
-          loadTicketData();
+          loadTicketDataRef.current?.();
         }, 1000);
         
         return;
@@ -204,7 +207,7 @@ export const ApprovalEvaluator = ({ rules }) => {
         
         // Refresh the app to show workflow details
         setTimeout(() => {
-          loadTicketData();
+          loadTicketDataRef.current?.();
         }, 1000);
       }
     } catch (error) {
@@ -257,117 +260,13 @@ export const ApprovalEvaluator = ({ rules }) => {
         cancelled: cancelledStatus?.id
       };
 
-      setupEventListeners();
+      registerTicketLifecycleHandlers();
       await loadTicketData();
     } catch (error) {
       console.error('Error initializing app:', error);
       setError(`Failed to initialize: ${JSON.stringify(error)}`);
       setLoading(false);
     }
-  };
-
-  const setupEventListeners = () => {
-    window.zafClient.on('ticket.save', async () => {
-      if (isProcessingStatusActionRef.current) {
-        return;
-      }
-
-      if (previousStatusRef.current === customStatusIdsRef.current.declined) {
-        autoAssignProcessedRef.current = false;
-      }
-
-      setTimeout(async () => {
-        try {
-          const ticketIdData = await window.zafClient.get('ticket.id');
-          const ticketId = ticketIdData['ticket.id'];
-          
-          const ticketResponse = await window.zafClient.request({
-            url: `/api/v2/tickets/${ticketId}.json`,
-            type: 'GET'
-          });
-
-          const ticket = ticketResponse.ticket;
-          const customStatusId = ticket.custom_status_id;
-          const previousStatusId = previousStatusRef.current;
-          const statusChanged = customStatusId !== previousStatusId;
-          const submittedAlready =
-            hasBeenSubmittedRef.current || (ticket.tags || []).includes(APPROVAL_STARTED_TAG);
-
-          if (customStatusId === customStatusIdsRef.current.submit_for_approval) {
-            if (!autoAssignProcessedRef.current) {
-              await autoAssignToLevel1();
-              previousStatusRef.current = customStatusIdsRef.current.submit_for_approval;
-            }
-            return;
-          }
-
-          if (!statusChanged) {
-            return;
-          }
-
-          // "Cancelled" is always allowed so users can cancel records that are no longer needed or declined.
-          if (customStatusIdsRef.current.cancelled != null && customStatusId === customStatusIdsRef.current.cancelled) {
-            previousStatusRef.current = customStatusId;
-            return;
-          }
-
-          // Before first submission, only "Submit for Approval" is allowed.
-          if (!submittedAlready) {
-            try {
-              isProcessingStatusActionRef.current = true;
-              await window.zafClient.request({
-                url: `/api/v2/tickets/${ticketId}.json`,
-                type: 'PUT',
-                contentType: 'application/json',
-                data: JSON.stringify({
-                  ticket: {
-                    custom_status_id: previousStatusId,
-                    comment: {
-                      body: 'Use "Submit for Approval" to submit this credit memo ticket.',
-                      public: false
-                    }
-                  }
-                })
-              });
-              setError('Use "Submit for Approval" to submit this credit memo ticket.');
-              await loadTicketData();
-            } finally {
-              isProcessingStatusActionRef.current = false;
-            }
-            return;
-          }
-
-          // After first submission, status changes must not be used to move approvals.
-          if (submittedAlready) {
-            try {
-              isProcessingStatusActionRef.current = true;
-              await window.zafClient.request({
-                url: `/api/v2/tickets/${ticketId}.json`,
-                type: 'PUT',
-                contentType: 'application/json',
-                data: JSON.stringify({
-                  ticket: {
-                    custom_status_id: previousStatusId,
-                    comment: {
-                      body: 'To approve or decline a credit memo ticket, please use the buttons within the approval app.',
-                      public: false
-                    }
-                  }
-                })
-              });
-              setError('To approve or decline a credit memo ticket, please use the buttons within the approval app.');
-              await loadTicketData();
-            } finally {
-              isProcessingStatusActionRef.current = false;
-            }
-            return;
-          }
-          previousStatusRef.current = customStatusId;
-        } catch (error) {
-          console.error('Error checking ticket status after save:', error);
-        }
-      }, 1000);
-    });
   };
 
   const loadTicketData = async () => {
@@ -485,6 +384,8 @@ export const ApprovalEvaluator = ({ rules }) => {
       setLoading(false);
     }
   };
+
+  loadTicketDataRef.current = loadTicketData;
 
   // Helper function to normalize numeric values by removing formatting (commas, etc.)
   const normalizeNumericValue = (value) => {
@@ -668,6 +569,227 @@ export const ApprovalEvaluator = ({ rules }) => {
     };
   };
 
+  const collectTicketDataForEvaluation = async () => {
+    const data = await window.zafClient.get([
+      'ticket.id',
+      'ticket.subject',
+      'ticket.description',
+      'ticket.status',
+      'ticket.priority',
+      'ticket.requester'
+    ]);
+
+    const ticketFieldsResponse = await window.zafClient.get('ticketFields');
+    const allFields = ticketFieldsResponse.ticketFields || [];
+
+    const creditTypeField = allFields.find(field => {
+      const fieldLabel = (field.label || field.title || '').toLowerCase();
+      return fieldLabel.includes('type') && fieldLabel.includes('credit');
+    });
+
+    const customFields = allFields.filter(field => field.name && field.name.startsWith('custom_field_'));
+
+    for (const field of customFields) {
+      try {
+        const fieldData = await window.zafClient.get(`ticket.customField:${field.name}`);
+        data[field.name] = fieldData[`ticket.customField:${field.name}`];
+      } catch (err) {
+        // Field not accessible
+      }
+    }
+
+    const groupsResponse = await window.zafClient.request({
+      url: '/api/v2/groups.json',
+      type: 'GET'
+    });
+    const fetchedGroups = groupsResponse.groups || [];
+
+    const fetchedRules = await fetchRulesFromCustomObject();
+
+    const evaluation = evaluateApproval(data, fetchedRules, fetchedGroups, creditTypeField?.name);
+
+    return { evaluation };
+  };
+
+  const statusIdsEqual = (a, b) => {
+    if (a === b) return true;
+    if (a == null || b == null) return false;
+    return Number(a) === Number(b);
+  };
+
+  const isTicketInApprovalWorkflow = (ticket, ids) => {
+    const tags = ticket.tags || [];
+    const sid = ticket.custom_status_id;
+    return (
+      tags.includes(APPROVAL_STARTED_TAG) ||
+      statusIdsEqual(sid, ids.submit_for_approval) ||
+      statusIdsEqual(sid, ids.pending_approval) ||
+      statusIdsEqual(sid, ids.approved) ||
+      statusIdsEqual(sid, ids.declined)
+    );
+  };
+
+  const registerTicketLifecycleHandlers = () => {
+    if (lifecycleHandlersRegisteredRef.current) {
+      return;
+    }
+    lifecycleHandlersRegisteredRef.current = true;
+
+    window.zafClient.on('ticket.save', async () => {
+      if (isProcessingStatusActionRef.current) {
+        return true;
+      }
+
+      const ids = customStatusIdsRef.current;
+      if (!ids || ids.approved == null) {
+        return true;
+      }
+
+      try {
+        const customStatusResp = await window.zafClient.get('ticket.customStatus');
+        const intended = customStatusResp['ticket.customStatus'];
+        const intendedId = intended && intended.id != null ? intended.id : null;
+
+        const ticketIdResp = await window.zafClient.get('ticket.id');
+        const ticketId = ticketIdResp['ticket.id'];
+
+        const ticketResponse = await window.zafClient.request({
+          url: `/api/v2/tickets/${ticketId}.json`,
+          type: 'GET'
+        });
+        const persistedTicket = ticketResponse.ticket;
+        const persistedStatusId =
+          persistedTicket.custom_status_id != null ? persistedTicket.custom_status_id : null;
+
+        if (ids.declined != null && statusIdsEqual(persistedStatusId, ids.declined)) {
+          autoAssignProcessedRef.current = false;
+        }
+
+        if (intendedId == null && persistedStatusId == null) {
+          return true;
+        }
+
+        if (statusIdsEqual(intendedId, persistedStatusId)) {
+          return true;
+        }
+
+        const submittedAlready = isTicketInApprovalWorkflow(persistedTicket, ids);
+
+        let evaluation;
+        try {
+          const result = await collectTicketDataForEvaluation();
+          evaluation = result.evaluation;
+        } catch (evalErr) {
+          console.error('Approval evaluation for save hook failed:', evalErr);
+          return true;
+        }
+
+        const currentUserResp = await window.zafClient.get('currentUser');
+        const currentUser = currentUserResp.currentUser;
+        const userGroupIds = currentUser?.groups?.map((g) => g.id) || [];
+        const assigneeGroupId = persistedTicket.group_id;
+        const userInApprovalGroup = Boolean(
+          assigneeGroupId && userGroupIds.includes(assigneeGroupId)
+        );
+
+        const strictNonApproverMode =
+          !evaluation.isAutoApproved &&
+          !userInApprovalGroup &&
+          (evaluation.requiresApproval || submittedAlready);
+
+        const NON_APPROVER_ALLOWED_STATUSES_MSG =
+          'Approval App\nTo move this credit memo through approval, use the Approve or Decline buttons in this app when you are in the assigned group. You can still set status to Cancelled here if needed.';
+
+        if (strictNonApproverMode) {
+          const intendedIsSubmitOrCancel =
+            statusIdsEqual(intendedId, ids.submit_for_approval) ||
+            (ids.cancelled != null && statusIdsEqual(intendedId, ids.cancelled));
+          if (intendedIsSubmitOrCancel) {
+            return true;
+          }
+          setError(NON_APPROVER_ALLOWED_STATUSES_MSG);
+          return Promise.reject(NON_APPROVER_ALLOWED_STATUSES_MSG);
+        }
+
+        if (!submittedAlready) {
+          if (ids.cancelled != null && statusIdsEqual(intendedId, ids.cancelled)) {
+            return true;
+          }
+          if (statusIdsEqual(intendedId, ids.submit_for_approval)) {
+            return true;
+          }
+          const msg = 'Use "Submit for Approval" to submit this credit memo ticket.';
+          setError(msg);
+          return Promise.reject(msg);
+        }
+
+        if (ids.cancelled != null && statusIdsEqual(intendedId, ids.cancelled)) {
+          return true;
+        }
+
+        if (statusIdsEqual(intendedId, ids.approved) && evaluation.requiresApproval) {
+          const msg =
+            'Only users in the approval level group can update the status to approved.  Please use Submit for Approval status to move the ticket to the appropriate approval level and then wait for approval';
+          setError(msg);
+          return Promise.reject(msg);
+        }
+
+        if (statusIdsEqual(intendedId, ids.approved) && !evaluation.requiresApproval) {
+          return true;
+        }
+
+        const msg =
+          'To move this credit memo through approval, use the Approve or Decline buttons in this app when you are in the assigned group. You can still set status to Cancelled here if needed.';
+        setError(msg);
+        return Promise.reject(msg);
+      } catch (err) {
+        console.error('ticket.save validation error:', err);
+        return true;
+      }
+    });
+
+    window.zafClient.on('ticket.submit.done', async () => {
+      if (isProcessingStatusActionRef.current) {
+        return;
+      }
+      try {
+        setError(null);
+        const ticketIdData = await window.zafClient.get('ticket.id');
+        const ticketId = ticketIdData['ticket.id'];
+        const ticketResponse = await window.zafClient.request({
+          url: `/api/v2/tickets/${ticketId}.json`,
+          type: 'GET'
+        });
+        const ticket = ticketResponse.ticket;
+        const customStatusId = ticket.custom_status_id;
+        const ids = customStatusIdsRef.current;
+
+        if (statusIdsEqual(customStatusId, ids.submit_for_approval) && !autoAssignProcessedRef.current) {
+          await autoAssignToLevel1();
+        }
+
+        window.setTimeout(() => {
+          loadTicketDataRef.current?.();
+        }, 1000);
+      } catch (e) {
+        console.error('ticket.submit.done handler error:', e);
+      }
+    });
+
+    window.zafClient.on('ticket.updated', () => {
+      if (isProcessingStatusActionRef.current) {
+        return;
+      }
+      if (ticketUpdatedRefreshTimerRef.current != null) {
+        window.clearTimeout(ticketUpdatedRefreshTimerRef.current);
+      }
+      ticketUpdatedRefreshTimerRef.current = window.setTimeout(() => {
+        ticketUpdatedRefreshTimerRef.current = null;
+        loadTicketDataRef.current?.();
+      }, 1000);
+    });
+  };
+
   const handleApprove = async (ticketId = ticketData?.['ticket.id']) => {
     const activeEvaluation = evaluationRef.current;
     const activeGroup = currentGroupRef.current;
@@ -743,7 +865,9 @@ export const ApprovalEvaluator = ({ rules }) => {
         setSuccessMessage(`Approved and assigned to ${nextLevel.groupName} (Level ${nextLevel.level})`);
       }
 
-      await loadTicketData();
+      window.setTimeout(() => {
+        loadTicketDataRef.current?.();
+      }, 1000);
 
       setTimeout(() => setSuccessMessage(''), 5000);
     } catch (error) {
@@ -806,7 +930,9 @@ export const ApprovalEvaluator = ({ rules }) => {
           ? `Request declined and reassigned to ${activeCreator.name}`
           : 'Request declined and reassigned to original credit creator'
       );
-      await loadTicketData();
+      window.setTimeout(() => {
+        loadTicketDataRef.current?.();
+      }, 1000);
 
       setTimeout(() => setSuccessMessage(''), 5000);
     } catch (error) {
@@ -974,30 +1100,29 @@ export const ApprovalEvaluator = ({ rules }) => {
         </div>
       )}
 
-      {currentLevel && !isFullyApproved && !isDeclined && !isCancelled && (
+      {evaluation.requiresApproval &&
+        currentLevel &&
+        !isFullyApproved &&
+        !isDeclined &&
+        !isCancelled &&
+        canApprove && (
         <div style={{ marginTop: '16px' }}>
-          {canApprove ? (
-            <ButtonGroup>
-              <Button
-                isPrimary
-                onClick={() => handleApprove()}
-              >
-                {currentLevelIndex === evaluation.approvalLevels.length - 1
-                  ? 'Final Approval'
-                  : `Approve & Assign to Level ${evaluation.approvalLevels[currentLevelIndex + 1].level}`}
-              </Button>
-              <Button
-                isDanger
-                onClick={() => setShowDeclineModal(true)}
-              >
-                Decline
-              </Button>
-            </ButtonGroup>
-          ) : (
-            <Alert type="info">
-              You are not a member of the current approval group. Only members of {currentGroup?.name} can approve or decline this request.
-            </Alert>
-          )}
+          <ButtonGroup>
+            <Button
+              isPrimary
+              onClick={() => handleApprove()}
+            >
+              {currentLevelIndex === evaluation.approvalLevels.length - 1
+                ? 'Final Approval'
+                : `Approve & Assign to Level ${evaluation.approvalLevels[currentLevelIndex + 1].level}`}
+            </Button>
+            <Button
+              isDanger
+              onClick={() => setShowDeclineModal(true)}
+            >
+              Decline
+            </Button>
+          </ButtonGroup>
         </div>
       )}
 
