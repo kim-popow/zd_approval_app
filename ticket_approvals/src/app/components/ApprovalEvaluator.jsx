@@ -41,7 +41,16 @@ export const ApprovalEvaluator = ({ rules }) => {
   const evaluationRef = useRef(null);
   const loadTicketDataRef = useRef(async () => {});
   const lifecycleHandlersRegisteredRef = useRef(false);
-  const ticketUpdatedRefreshTimerRef = useRef(null);
+
+  /** Ask Agent Workspace to reload the ticket so new comments appear (no extra API writes). */
+  const syncHostTicketView = async (ticketId) => {
+    if (ticketId == null) return;
+    try {
+      await window.zafClient.invoke('routeTo', 'ticket', ticketId);
+    } catch (err) {
+      console.warn('syncHostTicketView:', err);
+    }
+  };
 
   const fetchRulesFromCustomObject = async () => {
     try {
@@ -87,7 +96,8 @@ export const ApprovalEvaluator = ({ rules }) => {
       .filter(Boolean);
   };
 
-  const autoAssignToLevel1 = useCallback(async () => {
+  const autoAssignToLevel1 = useCallback(async (options = {}) => {
+    const { skipLoadTicketData = false } = options;
     if (autoAssignProcessedRef.current) {
       return;
     }
@@ -174,12 +184,12 @@ export const ApprovalEvaluator = ({ rules }) => {
         });
 
         autoAssignProcessedRef.current = true;
-        
-        // Refresh the app to show the approved status
-        setTimeout(() => {
-          loadTicketDataRef.current?.();
-        }, 1000);
-        
+
+        if (!skipLoadTicketData) {
+          await loadTicketDataRef.current?.();
+          await syncHostTicketView(data['ticket.id']);
+        }
+
         return;
       }
 
@@ -204,11 +214,11 @@ export const ApprovalEvaluator = ({ rules }) => {
         });
 
         autoAssignProcessedRef.current = true;
-        
-        // Refresh the app to show workflow details
-        setTimeout(() => {
-          loadTicketDataRef.current?.();
-        }, 1000);
+
+        if (!skipLoadTicketData) {
+          await loadTicketDataRef.current?.();
+          await syncHostTicketView(data['ticket.id']);
+        }
       }
     } catch (error) {
       console.error('Error in autoAssignToLevel1:', error);
@@ -697,8 +707,8 @@ export const ApprovalEvaluator = ({ rules }) => {
           !userInApprovalGroup &&
           (evaluation.requiresApproval || submittedAlready);
 
-        const NON_APPROVER_ALLOWED_STATUSES_MSG =
-          'Approval App\nTo move this credit memo through approval, use the Approve or Decline buttons in this app when you are in the assigned group. You can still set status to Cancelled here if needed.';
+        const DISALLOWED_CUSTOM_STATUS_CHANGE_MSG =
+          'Only use Submit for Approval status.  If ticket requires approval a supervisor/manager will review and approve.  The system will handle the process - you can always check the status of the approval in this app';
 
         if (strictNonApproverMode) {
           const intendedIsSubmitOrCancel =
@@ -707,8 +717,8 @@ export const ApprovalEvaluator = ({ rules }) => {
           if (intendedIsSubmitOrCancel) {
             return true;
           }
-          setError(NON_APPROVER_ALLOWED_STATUSES_MSG);
-          return Promise.reject(NON_APPROVER_ALLOWED_STATUSES_MSG);
+          setError(DISALLOWED_CUSTOM_STATUS_CHANGE_MSG);
+          return Promise.reject(DISALLOWED_CUSTOM_STATUS_CHANGE_MSG);
         }
 
         if (!submittedAlready) {
@@ -718,9 +728,8 @@ export const ApprovalEvaluator = ({ rules }) => {
           if (statusIdsEqual(intendedId, ids.submit_for_approval)) {
             return true;
           }
-          const msg = 'Use "Submit for Approval" to submit this credit memo ticket.';
-          setError(msg);
-          return Promise.reject(msg);
+          setError(DISALLOWED_CUSTOM_STATUS_CHANGE_MSG);
+          return Promise.reject(DISALLOWED_CUSTOM_STATUS_CHANGE_MSG);
         }
 
         if (ids.cancelled != null && statusIdsEqual(intendedId, ids.cancelled)) {
@@ -728,20 +737,16 @@ export const ApprovalEvaluator = ({ rules }) => {
         }
 
         if (statusIdsEqual(intendedId, ids.approved) && evaluation.requiresApproval) {
-          const msg =
-            'Only users in the approval level group can update the status to approved.  Please use Submit for Approval status to move the ticket to the appropriate approval level and then wait for approval';
-          setError(msg);
-          return Promise.reject(msg);
+          setError(DISALLOWED_CUSTOM_STATUS_CHANGE_MSG);
+          return Promise.reject(DISALLOWED_CUSTOM_STATUS_CHANGE_MSG);
         }
 
         if (statusIdsEqual(intendedId, ids.approved) && !evaluation.requiresApproval) {
           return true;
         }
 
-        const msg =
-          'To move this credit memo through approval, use the Approve or Decline buttons in this app when you are in the assigned group. You can still set status to Cancelled here if needed.';
-        setError(msg);
-        return Promise.reject(msg);
+        setError(DISALLOWED_CUSTOM_STATUS_CHANGE_MSG);
+        return Promise.reject(DISALLOWED_CUSTOM_STATUS_CHANGE_MSG);
       } catch (err) {
         console.error('ticket.save validation error:', err);
         return true;
@@ -764,29 +769,24 @@ export const ApprovalEvaluator = ({ rules }) => {
         const customStatusId = ticket.custom_status_id;
         const ids = customStatusIdsRef.current;
 
+        let ranAutoAssignFromSubmit = false;
         if (statusIdsEqual(customStatusId, ids.submit_for_approval) && !autoAssignProcessedRef.current) {
-          await autoAssignToLevel1();
+          await autoAssignToLevel1({ skipLoadTicketData: true });
+          ranAutoAssignFromSubmit = true;
         }
 
-        window.setTimeout(() => {
-          loadTicketDataRef.current?.();
-        }, 1000);
+        if (ranAutoAssignFromSubmit) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+
+        await loadTicketDataRef.current?.();
+
+        if (ranAutoAssignFromSubmit) {
+          await syncHostTicketView(ticketId);
+        }
       } catch (e) {
         console.error('ticket.submit.done handler error:', e);
       }
-    });
-
-    window.zafClient.on('ticket.updated', () => {
-      if (isProcessingStatusActionRef.current) {
-        return;
-      }
-      if (ticketUpdatedRefreshTimerRef.current != null) {
-        window.clearTimeout(ticketUpdatedRefreshTimerRef.current);
-      }
-      ticketUpdatedRefreshTimerRef.current = window.setTimeout(() => {
-        ticketUpdatedRefreshTimerRef.current = null;
-        loadTicketDataRef.current?.();
-      }, 1000);
     });
   };
 
@@ -865,9 +865,8 @@ export const ApprovalEvaluator = ({ rules }) => {
         setSuccessMessage(`Approved and assigned to ${nextLevel.groupName} (Level ${nextLevel.level})`);
       }
 
-      window.setTimeout(() => {
-        loadTicketDataRef.current?.();
-      }, 1000);
+      await loadTicketDataRef.current?.();
+      await syncHostTicketView(ticketId);
 
       setTimeout(() => setSuccessMessage(''), 5000);
     } catch (error) {
@@ -930,9 +929,8 @@ export const ApprovalEvaluator = ({ rules }) => {
           ? `Request declined and reassigned to ${activeCreator.name}`
           : 'Request declined and reassigned to original credit creator'
       );
-      window.setTimeout(() => {
-        loadTicketDataRef.current?.();
-      }, 1000);
+      await loadTicketDataRef.current?.();
+      await syncHostTicketView(ticketId);
 
       setTimeout(() => setSuccessMessage(''), 5000);
     } catch (error) {
