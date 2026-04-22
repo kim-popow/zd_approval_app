@@ -683,6 +683,14 @@ export const ApprovalEvaluator = ({ rules }) => {
           return true;
         }
 
+        const movingToSubmitForApproval =
+          statusIdsEqual(intendedId, ids.submit_for_approval) &&
+          !statusIdsEqual(persistedStatusId, ids.submit_for_approval);
+        if (movingToSubmitForApproval) {
+          // Reset so previously approved/declined tickets can run full submission flow again.
+          autoAssignProcessedRef.current = false;
+        }
+
         const submittedAlready = isTicketInApprovalWorkflow(persistedTicket, ids);
 
         let evaluation;
@@ -733,6 +741,10 @@ export const ApprovalEvaluator = ({ rules }) => {
         }
 
         if (ids.cancelled != null && statusIdsEqual(intendedId, ids.cancelled)) {
+          return true;
+        }
+
+        if (statusIdsEqual(intendedId, ids.submit_for_approval)) {
           return true;
         }
 
