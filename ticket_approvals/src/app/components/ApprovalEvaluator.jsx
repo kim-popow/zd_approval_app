@@ -654,28 +654,29 @@ export const ApprovalEvaluator = ({ rules }) => {
     lifecycleHandlersRegisteredRef.current = true;
 
     const readPersistedCustomStatusId = async (ticketId) => {
-      let sid = null;
-      try {
-        const z = await window.zafClient.get('ticket.customStatus');
-        const cs = z['ticket.customStatus'];
-        if (cs && cs.id != null) {
-          sid = cs.id;
-        }
-      } catch (_) {
-        // Host may not expose custom status yet; fall back to REST.
-      }
-      if (sid == null && ticketId != null) {
+      // Prefer REST `custom_status_id` — host `ticket.customStatus` often lags right after save,
+      // which caused submit-for-approval polling and ticket.updated handlers to miss the new status.
+      if (ticketId != null) {
         try {
           const r = await window.zafClient.request({
             url: `/api/v2/tickets/${ticketId}.json`,
             type: 'GET'
           });
-          sid = r.ticket?.custom_status_id ?? null;
+          return r.ticket?.custom_status_id ?? null;
         } catch (_) {
-          sid = null;
+          // Fall back to host below (e.g. network error).
         }
       }
-      return sid;
+      try {
+        const z = await window.zafClient.get('ticket.customStatus');
+        const cs = z['ticket.customStatus'];
+        if (cs && cs.id != null) {
+          return cs.id;
+        }
+      } catch (_) {
+        // Host may not expose custom status yet.
+      }
+      return null;
     };
 
     /**
@@ -694,15 +695,13 @@ export const ApprovalEvaluator = ({ rules }) => {
       }
 
       let ranAuto = false;
-      let sawSubmitForApprovalStatus = false;
-      const maxAttempts = 8;
-      const delayMs = 300;
+      const maxAttempts = 15;
+      const delayMs = 350;
 
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const sid = await readPersistedCustomStatusId(ticketId);
 
         if (statusIdsEqual(sid, ids.submit_for_approval)) {
-          sawSubmitForApprovalStatus = true;
           if (!autoAssignProcessedRef.current) {
             await autoAssignToLevel1({ skipLoadTicketData: true });
             ranAuto = true;
@@ -724,9 +723,7 @@ export const ApprovalEvaluator = ({ rules }) => {
       }
 
       await loadTicketDataRef.current?.();
-      if (ranAuto || sawSubmitForApprovalStatus) {
-        await syncHostTicketView(ticketId);
-      }
+      await syncHostTicketView(ticketId);
       return ranAuto;
     };
 
