@@ -31,6 +31,8 @@ export const ApprovalEvaluator = ({ rules }) => {
   const customStatusIdsRef = useRef({});
   const previousStatusRef = useRef(null);
   const autoAssignProcessedRef = useRef(false);
+  const autoAssignInFlightRef = useRef(false);
+  const ticketUpdatedDebounceRef = useRef(null);
   const isProcessingStatusActionRef = useRef(false);
   const groupsRef = useRef([]);
   const currentGroupRef = useRef(null);
@@ -101,7 +103,11 @@ export const ApprovalEvaluator = ({ rules }) => {
     if (autoAssignProcessedRef.current) {
       return;
     }
-    
+    if (autoAssignInFlightRef.current) {
+      return;
+    }
+    autoAssignInFlightRef.current = true;
+
     try {
       const data = await window.zafClient.get([
         'ticket.id',
@@ -222,6 +228,8 @@ export const ApprovalEvaluator = ({ rules }) => {
       }
     } catch (error) {
       console.error('Error in autoAssignToLevel1:', error);
+    } finally {
+      autoAssignInFlightRef.current = false;
     }
   }, []);
 
@@ -315,7 +323,7 @@ export const ApprovalEvaluator = ({ rules }) => {
           if (!autoAssignProcessedRef.current) {
             autoAssignToLevel1();
           }
-        }, 2000);
+        }, 1000);
       }
 
       const groupsResponse = await window.zafClient.request({
@@ -645,6 +653,83 @@ export const ApprovalEvaluator = ({ rules }) => {
     }
     lifecycleHandlersRegisteredRef.current = true;
 
+    const readPersistedCustomStatusId = async (ticketId) => {
+      let sid = null;
+      try {
+        const z = await window.zafClient.get('ticket.customStatus');
+        const cs = z['ticket.customStatus'];
+        if (cs && cs.id != null) {
+          sid = cs.id;
+        }
+      } catch (_) {
+        // Host may not expose custom status yet; fall back to REST.
+      }
+      if (sid == null && ticketId != null) {
+        try {
+          const r = await window.zafClient.request({
+            url: `/api/v2/tickets/${ticketId}.json`,
+            type: 'GET'
+          });
+          sid = r.ticket?.custom_status_id ?? null;
+        } catch (_) {
+          sid = null;
+        }
+      }
+      return sid;
+    };
+
+    /**
+     * After the agent saves with "Submit for Approval", the host/API can briefly lag.
+     * Poll until we see that status (or workflow has moved on), run auto-assign once, then
+     * reload app state and refresh the host ticket so the agent does not need a second save.
+     */
+    const runSubmitForApprovalAutoFlow = async (ticketId) => {
+      const ids = customStatusIdsRef.current;
+      if (ticketId == null || ids.submit_for_approval == null) {
+        await loadTicketDataRef.current?.();
+        if (ticketId != null) {
+          await syncHostTicketView(ticketId);
+        }
+        return false;
+      }
+
+      let ranAuto = false;
+      let sawSubmitForApprovalStatus = false;
+      const maxAttempts = 8;
+      const delayMs = 300;
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const sid = await readPersistedCustomStatusId(ticketId);
+
+        if (statusIdsEqual(sid, ids.submit_for_approval)) {
+          sawSubmitForApprovalStatus = true;
+          if (!autoAssignProcessedRef.current) {
+            await autoAssignToLevel1({ skipLoadTicketData: true });
+            ranAuto = true;
+          }
+          break;
+        }
+
+        const movedPastSubmit =
+          statusIdsEqual(sid, ids.pending_approval) ||
+          statusIdsEqual(sid, ids.approved) ||
+          (ids.declined != null && statusIdsEqual(sid, ids.declined));
+        if (movedPastSubmit) {
+          break;
+        }
+
+        if (attempt < maxAttempts - 1) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+
+      await loadTicketDataRef.current?.();
+      if (ranAuto || sawSubmitForApprovalStatus) {
+        await syncHostTicketView(ticketId);
+      }
+      return ranAuto;
+    };
+
     window.zafClient.on('ticket.save', async () => {
       if (isProcessingStatusActionRef.current) {
         return true;
@@ -773,32 +858,39 @@ export const ApprovalEvaluator = ({ rules }) => {
         setError(null);
         const ticketIdData = await window.zafClient.get('ticket.id');
         const ticketId = ticketIdData['ticket.id'];
-        const ticketResponse = await window.zafClient.request({
-          url: `/api/v2/tickets/${ticketId}.json`,
-          type: 'GET'
-        });
-        const ticket = ticketResponse.ticket;
-        const customStatusId = ticket.custom_status_id;
-        const ids = customStatusIdsRef.current;
-
-        let ranAutoAssignFromSubmit = false;
-        if (statusIdsEqual(customStatusId, ids.submit_for_approval) && !autoAssignProcessedRef.current) {
-          await autoAssignToLevel1({ skipLoadTicketData: true });
-          ranAutoAssignFromSubmit = true;
-        }
-
-        if (ranAutoAssignFromSubmit) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
-
-        await loadTicketDataRef.current?.();
-
-        if (ranAutoAssignFromSubmit) {
-          await syncHostTicketView(ticketId);
-        }
+        await runSubmitForApprovalAutoFlow(ticketId);
       } catch (e) {
         console.error('ticket.submit.done handler error:', e);
       }
+    });
+
+    window.zafClient.on('ticket.updated', () => {
+      if (isProcessingStatusActionRef.current) {
+        return;
+      }
+      if (ticketUpdatedDebounceRef.current) {
+        clearTimeout(ticketUpdatedDebounceRef.current);
+      }
+      ticketUpdatedDebounceRef.current = setTimeout(async () => {
+        ticketUpdatedDebounceRef.current = null;
+        try {
+          if (autoAssignProcessedRef.current) {
+            return;
+          }
+          const ids = customStatusIdsRef.current;
+          if (!ids || ids.submit_for_approval == null) {
+            return;
+          }
+          const ticketIdData = await window.zafClient.get('ticket.id');
+          const ticketId = ticketIdData['ticket.id'];
+          const sid = await readPersistedCustomStatusId(ticketId);
+          if (statusIdsEqual(sid, ids.submit_for_approval) && !autoAssignProcessedRef.current) {
+            await runSubmitForApprovalAutoFlow(ticketId);
+          }
+        } catch (e) {
+          console.warn('ticket.updated handler:', e);
+        }
+      }, 600);
     });
   };
 
