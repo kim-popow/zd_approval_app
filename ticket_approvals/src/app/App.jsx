@@ -264,6 +264,10 @@ const App = () => {
         }
       };
 
+      if (parentTicket.brand_id) {
+        ticketPayload.ticket.brand_id = parentTicket.brand_id;
+      }
+
       const response = await window.zafClient.request({
         url: '/api/v2/tickets.json',
         type: 'POST',

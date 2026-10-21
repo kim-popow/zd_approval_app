@@ -9,6 +9,7 @@ import { RuleList, RuleCard, RuleHeader, RuleDetails, RuleActions, FormRow } fro
 export const RuleManager = () => {
   const [rules, setRules] = useState([]);
   const [groups, setGroups] = useState([]);
+  const [brands, setBrands] = useState([]);
   const [ticketFields, setTicketFields] = useState([]);
   const [creditTypeOptions, setCreditTypeOptions] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -20,6 +21,7 @@ export const RuleManager = () => {
   const [formData, setFormData] = useState({
     ruleName: '',
     creditTypeValue: '',
+    brandValue: '',
     fieldName: '',
     operator: 'greater_than',
     value: '',
@@ -123,6 +125,7 @@ export const RuleManager = () => {
       try {
         await loadRules();
         await loadGroups();
+        await loadBrands();
         await loadTicketFields();
       } catch (err) {
         console.error('Error in initializeData:', err);
@@ -137,6 +140,15 @@ export const RuleManager = () => {
       setGroups(response.groups || []);
     } catch (err) {
       console.error('Failed to load groups:', err);
+    }
+  };
+
+  const loadBrands = async () => {
+    try {
+      const response = await window.zafClient.request('/api/v2/brands.json');
+      setBrands(response.brands || []);
+    } catch (err) {
+      console.error('Failed to load brands:', err);
     }
   };
 
@@ -280,6 +292,7 @@ export const RuleManager = () => {
       const requiredFields = [
         { key: 'rule_name', title: 'Rule Name', type: 'text' },
         { key: 'credit_type_value', title: 'Credit Type Value', type: 'text' },
+        { key: 'brand_value', title: 'Brand Value', type: 'text' },
         { key: 'field_name', title: 'Field Name', type: 'text' },
         { key: 'operator', title: 'Operator', type: 'text' },
         { key: 'value', title: 'Value', type: 'text' },
@@ -323,6 +336,7 @@ export const RuleManager = () => {
         id: record.id,
         ruleName: record.custom_object_fields.rule_name || '',
         creditTypeValue: record.custom_object_fields.credit_type_value || '',
+        brandValue: record.custom_object_fields.brand_value || '',
         fieldName: record.custom_object_fields.field_name || '',
         operator: record.custom_object_fields.operator || 'greater_than',
         value: record.custom_object_fields.value || '',
@@ -351,6 +365,7 @@ export const RuleManager = () => {
           custom_object_fields: {
             rule_name: rule.ruleName,
             credit_type_value: rule.creditTypeValue,
+            brand_value: rule.brandValue,
             field_name: rule.fieldName,
             operator: rule.operator,
             value: rule.value,
@@ -411,6 +426,7 @@ export const RuleManager = () => {
       setFormData({
         ruleName: rule.ruleName,
         creditTypeValue: rule.creditTypeValue,
+        brandValue: rule.brandValue,
         fieldName: rule.fieldName,
         operator: rule.operator,
         value: rule.value,
@@ -429,6 +445,7 @@ export const RuleManager = () => {
       setFormData({
         ruleName: '',
         creditTypeValue: '',
+        brandValue: '',
         fieldName: defaultAmountField,
         operator: 'greater_than',
         value: '',
@@ -457,6 +474,10 @@ export const RuleManager = () => {
     }
     if (!formData.creditTypeValue) {
       setError('Type of Credit is required');
+      return;
+    }
+    if (!formData.brandValue) {
+      setError('Brand is required');
       return;
     }
     if (!formData.fieldName || !formData.fieldName2) {
@@ -514,6 +535,11 @@ export const RuleManager = () => {
     return option ? option.label : value;
   };
 
+  const getBrandName = (brandValue) => {
+    const brand = brands.find(b => String(b.id) === String(brandValue));
+    return brand ? brand.name : brandValue;
+  };
+
   if (loading) {
     return <div>Loading rules...</div>;
   }
@@ -536,6 +562,7 @@ export const RuleManager = () => {
             </RuleHeader>
             <RuleDetails>
               <div><strong>Type of Credit:</strong> {getCreditTypeLabel(rule.creditTypeValue)}</div>
+              <div><strong>Brand:</strong> {getBrandName(rule.brandValue)}</div>
               <div><strong>Check 1:</strong> {getFieldLabel(rule.fieldName)} {getOperatorLabel(rule.operator)} {rule.value}</div>
               <div><strong>Check 2:</strong> {getFieldLabel(rule.fieldName2)} {getOperatorLabel(rule.operator2)} {rule.value2}</div>
               {rule.autoApprove ? (
@@ -584,6 +611,26 @@ export const RuleManager = () => {
                   {creditTypeOptions.length === 0 && <Item value="" disabled>Loading options...</Item>}
                   {creditTypeOptions.map(option => (
                     <Item key={option.value} value={option.value}>{option.label}</Item>
+                  ))}
+                </Combobox>
+              </DropdownField>
+            </FormRow>
+
+            <FormRow>
+              <DropdownField>
+                <Label>Brand (Required)</Label>
+                <Combobox
+                  isEditable={false}
+                  selectionValue={formData.brandValue}
+                  onChange={({ selectionValue }) => {
+                    if (selectionValue !== undefined) {
+                      setFormData({ ...formData, brandValue: selectionValue });
+                    }
+                  }}
+                >
+                  {brands.length === 0 && <Item value="" disabled>Loading brands...</Item>}
+                  {brands.map(brand => (
+                    <Item key={brand.id} value={String(brand.id)}>{brand.name}</Item>
                   ))}
                 </Combobox>
               </DropdownField>

@@ -67,6 +67,7 @@ export const ApprovalEvaluator = ({ rules }) => {
         id: record.id,
         ruleName: record.custom_object_fields.rule_name || '',
         creditTypeValue: record.custom_object_fields.credit_type_value || '',
+        brandValue: record.custom_object_fields.brand_value || '',
         fieldName: record.custom_object_fields.field_name || '',
         operator: record.custom_object_fields.operator || '',
         value: record.custom_object_fields.value || '',
@@ -115,7 +116,8 @@ export const ApprovalEvaluator = ({ rules }) => {
         'ticket.description',
         'ticket.status',
         'ticket.priority',
-        'ticket.requester'
+        'ticket.requester',
+        'ticket.brand'
       ]);
 
       const groupsResponse = await window.zafClient.request({
@@ -296,6 +298,7 @@ export const ApprovalEvaluator = ({ rules }) => {
         'ticket.status',
         'ticket.priority',
         'ticket.requester',
+        'ticket.brand',
         'currentUser'
       ]);
 
@@ -405,6 +408,38 @@ export const ApprovalEvaluator = ({ rules }) => {
 
   loadTicketDataRef.current = loadTicketData;
 
+  const resolveAssigneeGroupId = async (userId) => {
+    if (!userId) return null;
+
+    try {
+      const userResponse = await window.zafClient.request({
+        url: `/api/v2/users/${userId}.json`,
+        type: 'GET'
+      });
+      const user = userResponse?.user;
+      if (!user || user.role === 'end-user') {
+        return null;
+      }
+
+      if (user.default_group_id) {
+        return user.default_group_id;
+      }
+
+      const membershipsResponse = await window.zafClient.request({
+        url: `/api/v2/users/${userId}/group_memberships.json`,
+        type: 'GET'
+      });
+      const memberships = membershipsResponse.group_memberships || [];
+      if (memberships.length > 0) {
+        return memberships[0].group_id;
+      }
+    } catch (err) {
+      console.warn('resolveAssigneeGroupId:', err);
+    }
+
+    return null;
+  };
+
   // Helper function to normalize numeric values by removing formatting (commas, etc.)
   const normalizeNumericValue = (value) => {
     if (value === null || value === undefined || value === '') {
@@ -413,6 +448,53 @@ export const ApprovalEvaluator = ({ rules }) => {
     // Remove all non-numeric characters except decimal point
     const normalized = String(value).replace(/[^\d.]/g, '');
     return normalized;
+  };
+
+  const stripCommasFromNumericValue = (value) => {
+    if (value === null || value === undefined || value === '') {
+      return value;
+    }
+
+    const stringValue = String(value);
+    if (!stringValue.includes(',')) {
+      return value;
+    }
+
+    return stringValue.replace(/,/g, '');
+  };
+
+  const findCreditAmountField = (fields) => {
+    return fields.find((field) => {
+      const label = (field.label || field.title || '').toLowerCase();
+      return label.includes('credit') && label.includes('amount');
+    }) || null;
+  };
+
+  const normalizeCreditAmountFieldOnSave = async () => {
+    try {
+      const ticketFieldsResponse = await window.zafClient.get('ticketFields');
+      const allFields = ticketFieldsResponse.ticketFields || [];
+      const creditAmountField = findCreditAmountField(allFields);
+
+      if (!creditAmountField?.name) {
+        return;
+      }
+
+      const fieldKey = `ticket.customField:${creditAmountField.name}`;
+      const fieldData = await window.zafClient.get(fieldKey);
+      const currentValue = fieldData[fieldKey];
+
+      if (currentValue === null || currentValue === undefined || currentValue === '') {
+        return;
+      }
+
+      const normalizedValue = stripCommasFromNumericValue(currentValue);
+      if (normalizedValue !== currentValue) {
+        await window.zafClient.set(fieldKey, normalizedValue);
+      }
+    } catch (err) {
+      console.warn('normalizeCreditAmountFieldOnSave:', err);
+    }
   };
 
   // Helper function to check if a value is numeric (after normalization)
@@ -517,6 +599,12 @@ export const ApprovalEvaluator = ({ rules }) => {
   const evaluateApproval = (data, rules, groups, creditTypeFieldId) => {
     const creditTypeValue = creditTypeFieldId ? data[creditTypeFieldId] : null;
 
+    const brandRaw = data['ticket.brand'];
+    const brandValue =
+      brandRaw && typeof brandRaw === 'object'
+        ? (brandRaw.id != null ? String(brandRaw.id) : null)
+        : (brandRaw != null && brandRaw !== '' ? String(brandRaw) : null);
+
     const triggeredRules = [];
     const approvalLevelsMap = new Map();
 
@@ -540,6 +628,10 @@ export const ApprovalEvaluator = ({ rules }) => {
 
     rules.forEach((rule) => {
       if (rule.creditTypeValue && creditTypeValue !== rule.creditTypeValue) {
+        return;
+      }
+
+      if (rule.brandValue && String(brandValue) !== String(rule.brandValue)) {
         return;
       }
 
@@ -594,7 +686,8 @@ export const ApprovalEvaluator = ({ rules }) => {
       'ticket.description',
       'ticket.status',
       'ticket.priority',
-      'ticket.requester'
+      'ticket.requester',
+      'ticket.brand'
     ]);
 
     const ticketFieldsResponse = await window.zafClient.get('ticketFields');
@@ -728,6 +821,8 @@ export const ApprovalEvaluator = ({ rules }) => {
     };
 
     window.zafClient.on('ticket.save', async () => {
+      await normalizeCreditAmountFieldOnSave();
+
       if (isProcessingStatusActionRef.current) {
         return true;
       }
@@ -1005,12 +1100,18 @@ export const ApprovalEvaluator = ({ rules }) => {
         }
       };
 
-      if (activeCreator && activeCreator.id) {
-        updatePayload.ticket.assignee_id = activeCreator.id;
-        updatePayload.ticket.group_id = null;
-      } else if (activeRequester && activeRequester.id) {
-        updatePayload.ticket.assignee_id = activeRequester.id;
-        updatePayload.ticket.group_id = null;
+      const reassignTarget =
+        (activeCreator && activeCreator.id ? activeCreator : null)
+        || (activeRequester && activeRequester.id ? activeRequester : null);
+
+      let reassignedToName = null;
+      if (reassignTarget?.id) {
+        const assigneeGroupId = await resolveAssigneeGroupId(reassignTarget.id);
+        if (assigneeGroupId) {
+          updatePayload.ticket.assignee_id = reassignTarget.id;
+          updatePayload.ticket.group_id = assigneeGroupId;
+          reassignedToName = reassignTarget.name;
+        }
       }
 
       await window.zafClient.request({
@@ -1026,9 +1127,9 @@ export const ApprovalEvaluator = ({ rules }) => {
       setShowDeclineModal(false);
       setDeclineReason('');
       setSuccessMessage(
-        activeCreator?.name
-          ? `Request declined and reassigned to ${activeCreator.name}`
-          : 'Request declined and reassigned to original credit creator'
+        reassignedToName
+          ? `Request declined and reassigned to ${reassignedToName}`
+          : 'Request declined'
       );
       await loadTicketDataRef.current?.();
       await syncHostTicketView(ticketId);
